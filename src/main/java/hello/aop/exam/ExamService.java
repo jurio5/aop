@@ -1,6 +1,6 @@
 package hello.aop.exam;
 
-import hello.aop.exam.annotation.Trace;
+import hello.aop.exam.annotation.TimeTraceLog;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -10,8 +10,10 @@ public class ExamService {
 
     private final ExamRepository examRepository;
 
-    @Trace
-    public void request(String itemId) {
+//    @Trace
+    @TimeTraceLog
+    public void request(String itemId) throws InterruptedException {
         examRepository.save(itemId);
+        Thread.sleep(1500);
     }
 }

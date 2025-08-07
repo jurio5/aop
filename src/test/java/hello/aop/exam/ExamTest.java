@@ -1,6 +1,7 @@
 package hello.aop.exam;
 
 import hello.aop.exam.aop.RetryAspect;
+import hello.aop.exam.aop.TimeTraceAspect;
 import hello.aop.exam.aop.TraceAspect;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.Test;
@@ -11,18 +12,24 @@ import org.springframework.context.annotation.Import;
 @Slf4j
 @SpringBootTest
 //@Import(TraceAspect.class)
-@Import({TraceAspect.class, RetryAspect.class})
+@Import({TraceAspect.class, RetryAspect.class, TimeTraceAspect.class})
 class ExamTest {
 
     @Autowired
     ExamService examService;
 
     @Test
-    void test() {
+    void test() throws InterruptedException {
         for (int i = 0; i < 5; i++) {
             log.info("client request i={}", i);
             examService.request("data" + i);
         }
+    }
+
+    @Test
+    void timeTraceLog() throws InterruptedException {
+        examService.request("timeLogTest");
+        Thread.sleep(2000);
     }
 
 }
