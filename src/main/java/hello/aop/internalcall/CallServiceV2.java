@@ -1,24 +1,23 @@
 package hello.aop.internalcall;
 
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 
 @Slf4j
 @Component
-public class CallServiceV1 {
+@RequiredArgsConstructor
+public class CallServiceV2 {
 
-    private CallServiceV1 callServiceV1;
-
-    @Autowired
-    public void setCallServiceV1(CallServiceV1 callServiceV1) { // 생성자 주입, setter 주입 단계가 나뉘어 있기에 순환 사이클이 발생하지 않음
-        log.info("callServiceV1 setter ={}", callServiceV1.getClass());
-        this.callServiceV1 = callServiceV1;
-    }
-
+    //    private final ApplicationContext applicationContext;
+    private final ObjectProvider<CallServiceV2> callServiceProvider;
+    
     public void external() {
         log.info("call external");
-        callServiceV1.internal(); // 외부 메서드 호출
+//        CallServiceV2 callServiceV2 = applicationContext.getBean(CallServiceV2.class);
+        CallServiceV2 callServiceV2 = callServiceProvider.getObject(); // 지연 조회
+        callServiceV2.internal(); // 외부 메서드 호출
     }
 
     public void internal() {
