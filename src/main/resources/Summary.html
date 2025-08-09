@@ -1,0 +1,274 @@
+<!--
+### 프록시 내부 호출 문제
+
+- 스프링은 프록시 방식의 AOP를 사용한다. 따라서 AOP를 적용하려면 항상 프록시를 통해서 대상 객체(`Target`)을 호출해야 한다.
+  이렇게 해야 프록시에서 먼저 어드바이스를 호출하고, 이후에 대상 객체를 호출한다. 만약 프록시를 거치지 않고 대상 객체를 직접 호출하게 되면 AOP가 적용되지 않고,
+  어드바이스도 호출되지 않는다.
+- AOP를 적용하면 스프링은 대상 객체 대신에 프록시를 스프링 빈으로 등록한다.
+  따라서 스프링은 의존관계 주입 시 항상 프록시 객체를 주입한다.
+  프록시 객체가 주입되기 때문에 대상 객체를 직접 호출하는 문제는 일반적으로 발생하지 않는다.
+  하지만 대상 객체의 내부에서 메서드 호출이 발생하면 프록시를 거치지 않고 대상 객체를 직접 호출하는 문제가 발생한다.
+  이 부분이 프록시 내부 호출 문제 이다.
+
+
+  @Slf4j
+@Aspect
+public class CallLogAspect {
+
+    @Before("execution(* hello.aop.internalcall..*.*(..))")
+    public void doLog(JoinPoint joinPoint) {
+        log.info("aop={}", joinPoint.getSignature());
+    }
+}
+
+...
+
+@Slf4j
+@Component
+public class CallServiceV0 {
+
+    public void external() {
+        log.info("call external");
+        internal(); // 내부 메서드 호출 (this.internal())
+    }
+
+    public void internal() {
+        log.info("call internal");
+    }
+}
+
+...
+
+@Test
+void external() {
+    callService.external();
+} // external 내부의 internal() 부분은 로그로 찍히지 않음
+
+- 위 코드는 내부 호출 문제를 일으키는 간단한 예제로 기본적으로 스프링 AOP을 사용하는 경우 객체를 프록시로 만들고
+그 프록시가 스프링 빈에 등록되는 구조로 되어있고 호출 시 프록시의 타겟을 호출하는 방식으로 되어있다.
+여기서, `external` 메서드를 호출 시 내부에는 `internal`메서드가 들어가있고 이는 동일한 객체에 존재하는 메서드인데
+기본적으로 AOP가 실행될 때 `external`은 당연히 호출하는 타겟의 메서드 이기에 로그가 찍히지만, `internal`은 어디에 있는 메서드인지
+프록시는 알 수 없기에 기본적으로 `this`가 앞에 붙으며 이 객체의 메서드를 호출하게 되면서 AOP가 적용되지 않는 상황이 발생하고 이는 내부 호출 문제라고 볼 수 있다.
+
+### 프록시 내부 호출 해결 방안
+
+#### 수정자(setter) 주입을 통한 내부 호출 해결
+
+@Slf4j
+@Component
+public class CallServiceV1 {
+
+    private CallServiceV1 callServiceV1;
+
+    @Autowired
+    public void setCallServiceV1(CallServiceV1 callServiceV1) { // 생성자 주입, setter 주입 단계가 나뉘어 있기에 순환 사이클이 발생하지 않음
+        log.info("callServiceV1 setter ={}", callServiceV1.getClass());
+        this.callServiceV1 = callServiceV1;
+    }
+
+    public void external() {
+        log.info("call external");
+        callServiceV1.internal(); // 외부 메서드 호출
+    }
+
+    public void internal() {
+        log.info("call internal");
+    }
+}
+
+...
+
+@Slf4j
+@SpringBootTest
+@Import(CallLogAspect.class)
+class CallServiceV1Test {
+
+    @Autowired
+    CallServiceV1 callService;
+
+
+    @Test
+    void external() {
+        callService.external();
+    }
+}
+
+스프링 부트 2.6 버전 이후부터 순환 참조를 기본적으로 금지하도록 변경되어 위 코드를 적용하기 위해서는 환경설정 파일에 아래와 같이 등록해야한다.
+	- `spring.main.allow-circular-references=true`
+
+#### 지연 조회를 이용하여 내부 호출 해결
+
+@Slf4j
+@Component
+@RequiredArgsConstructor
+public class CallServiceV2 {
+
+    //    private final ApplicationContext applicationContext;
+    private final ObjectProvider<CallServiceV2> callServiceProvider;
+
+    public void external() {
+        log.info("call external");
+//        CallServiceV2 callServiceV2 = applicationContext.getBean(CallServiceV2.class);
+        CallServiceV2 callServiceV2 = callServiceProvider.getObject(); // 지연 조회
+        callServiceV2.internal(); // 외부 메서드 호출
+    }
+
+    public void internal() {
+        log.info("call internal");
+    }
+}
+
+...
+
+@Test
+void external() {
+    callService.external();
+}
+
+`ApplicationContext`를 사용해도 똑같은 기능을 제공하지만, 이 객체는 너무 많은 기능을 제공하기에 무겁다.
+`ObjectProvider`는 객체를 스프링 컨테이너에서 조회하는 것을 스프링 빈 생성 시점이 아니라 실제 객체를 사용하는 시점으로 지연할 수 있고,
+`callServiceProvider.getObject()`를 호출하는 시점에 스프링 컨테이너에서 빈을 조회한다.
+- 수정자 주입과는 다르게 자기 자신을 주입 받는것이 아니라 순환 사이클이 발생하지 않는다.
+
+#### 구조 변경을 통한 내부 호출 해결 (*권장*)
+
+/**
+ * 구조를 변경 (분리) */@Slf4j
+@Component
+@RequiredArgsConstructor
+public class CallServiceV3 {
+
+    private final InternalService internalService;
+
+    public void external() {
+        log.info("call external");
+        internalService.internal(); // 외부 메서드 호출
+    }
+}
+
+...
+
+@Slf4j
+@Component
+public class InternalService {
+
+    public void internal() {
+        log.info("call internal");
+    }
+}
+
+...
+
+@Test
+void external() {
+    callService.external();
+}
+
+- 기본적으로 AOP는 `private`에 등록이 불가능하고, `public` 제한자에 넣어 사용하며 대부분 큰 기능들에 사용이 되는데 AOP는 이러한 큰 기능들에 적용하는것이 적당하다.  `public` 메서드에서 `public` 메서드를 내부 호출 하는 경우에 발생하는 문제로, 이러한 경우 구조 자체를 변경하여 해결하는 것을 권장한다.
+- 물론, 구조를 변경한다 라는 뜻은 퍼사드를 두거나 객체 자체를 나눈다 라는 말도 있지만, 가능하다면 클라이언트에서 호출하는 부분을 두 개로 나누는 방식 역시 유효하다.
+	- `Client` -> `external()` 호출
+	- `Client` -> `internal()` 호출
+
+### 프록시 기술과 한계
+
+@Test
+void jdkProxy() {
+    MemberServiceImpl target = new MemberServiceImpl();
+    ProxyFactory proxyFactory = new ProxyFactory(target);
+    proxyFactory.setProxyTargetClass(false); // JDK 동적 프록시, 원래 Default 값이 false
+
+    // 프록시 인터페이스로 캐스팅    MemberService memberServiceProxy = (MemberService) proxyFactory.getProxy();
+
+    // JDK 동적 프록시를 구현 클래스로 캐스팅 시도 실패, ClassCastException 예외 발생
+    assertThrows(ClassCastException.class, () -> {
+        MemberServiceImpl castingMemberService = (MemberServiceImpl) memberServiceProxy;
+    });
+}
+
+@Test
+void cglibProxy() {
+    MemberServiceImpl target = new MemberServiceImpl();
+    ProxyFactory proxyFactory = new ProxyFactory(target);
+    proxyFactory.setProxyTargetClass(true); // CGLIB Proxy
+
+    // 프록시 인터페이스로 캐스팅    MemberService memberServiceProxy = (MemberService) proxyFactory.getProxy();
+
+    log.info("proxy class={}", memberServiceProxy.getClass());
+
+    // CGLIB 프록시를 구체 클래스로 캐스팅 시도 성공
+    MemberServiceImpl castingMemberService = (MemberServiceImpl) memberServiceProxy;
+}
+
+- Spring AOP에서 사용하는 포인트컷 지시자인 `this`와 `target`은 차이가 있다.
+	- `this`는 현재 AOP 프록시 객체 자체를 의미하고,
+	- `target`은 실제 타겟 객체(원본 객체)를 의미한다.
+- **JDK 동적 프록시**는 인터페이스를 기반으로 프록시 객체를 생성하기 때문에,
+프록시 객체를 구체 클래스 타입으로 형변환(casting)하면 `ClassCastException`이 발생한다. 즉, JDK 동적 프록시는 인터페이스가 반드시 필요하다.
+- 반면에, **CGLIB 프록시**는 구체 클래스를 상속받아 프록시를 생성하므로, 구체 클래스 타입 또는 인터페이스 타입으로 모두 형변환이 가능하다.
+따라서 구체 클래스 기반의 프록싱이 필요한 경우 CGLIB가 적합하다.
+
+#### 의존관계 주입 문제
+
+@Slf4j
+//@SpringBootTest(properties = {"spring.aop.proxy-target-class=false"}) // JDK 동적 프록시 설정
+@SpringBootTest(properties = {"spring.aop.proxy-target-class=true"}) // CGLIB PROXY
+@Import(ProxyDIAspect.class)
+public class ProxyDITest {
+
+    @Autowired
+    MemberService memberService; // 인터페이스
+
+    @Autowired
+    MemberServiceImpl memberServiceImpl; // 구체 클래스
+
+    @Test
+    void go() {
+        log.info("memberService.class={}", memberService.getClass());
+        log.info("memberServiceImpl.class={}", memberServiceImpl.getClass());
+        memberService.hello("hello");
+    }
+}
+
+타입 캐스팅 쪽에서 설명을 한 것 처럼 `JDK 동적 프록시`의 경우 인터페이스를 기반으로 프록시 객체를 만들기에 구체 클래스를 대상으로 호출 시 문제가 생기며,
+`CGLIB`의 경우 구체 클래스를 기반으로 프록시 객체를 만들기 때문에 타겟이 인터페이스,구체 클래스 전부 다 구현할 수 있는데
+사실 이 부분에서 중요한 부분은 잘 설계된 구조라면 이러한 부분들이 크게 문제가 되진 않는다.
+- 기본적으로 아키텍처 구조를 설계할 때 스프링의 `DI`를 생각해보면 쉽게 이 부분에 대해 이해할 수 있을텐데 구체 클래스가 변해도
+클라이언트의 코드는 수정이 필요하지 않게끔 설계하는 것이 베스트 프랙티스이다. 그렇다면 프록시 역시 인터페이스를 기반으로 설계를 하는게 베스트 프랙티스이고
+만일, 개발을 하다가 어떠한 문제 때문에 구체 클래스를 대상으로 구현을 해야할 땐 `CGLIB` 프록시를 이용하여 구현하면 된다.
+
+#### CGLIB 문제
+
+- 위 설명을 들어보면 `JDK 동적 프록시`와 비교하면 `CGLIB`가 좋아보이지만 이 `CGLIB`는 오히려 구체 클래스를 상속 받기 때문에 문제가 발생한다.
+	- 대상 클래스에 기본 생성자 필수
+	- 생성자 2번 호출 문제
+	- `final`키워드 클래스, 메서드 사용 불가
+
+- #### 대상 클래스에 기본 생성자 필수
+	- 자바 언어에서 상속을 받으면 자식 클래스의 생성자를 호출할 때 자식 클래스의 생성자에서 부모 클래스의 생성자도 호출해야 한다.
+	(이 부분이 생략되어 있으면 자식 클래스의 생성자 첫 줄에 부모 클래스의 기본 생성자를 호출하는 `super()`가 자동으로 들어간다.) 이 부분은 자바 문법 규약이다.
+	- `CGLIB`를 사용할 때 `CGLIB`가 만드는 프록시 생성자는 우리가 호출하는 것이 아니다. `CGLIB` 프록시는 대상 클래스를 상속받고,
+	생성자에서 대상 클래스의 기본 생성자를 호출한다. 따라서 대상 클래스에 기본 생성자를 만들어야 하는 것이다. (생성자가 하나도 없으면 자동으로 만들어진다.)
+
+- #### 생성자 2번 호출 문제
+	- `CGLIB`는 구체 클래스를 상속 받는다. 자바 언어에서 상속을 받으면 자식 클래스의 생성자를 호출할 때 부모 클래스의 생성자도 호출해야 한다. (왜 2번 호출이 되는가?)
+		1. 실제 `target`의 객체를 생성할 때
+		2. 프록시 객체를 생성할 때 부모 클래스의 생성자를 호출
+
+#### final 키워드 클래스, 메서드 사용 불가
+- `final`키워드가 클래스에 있으면 상속이 불가능하고, 메서드에 있으면 오버라이딩이 불가능하다. 따라서 `CGLIB`는 상속을 기반으로 하기 때문에 두 경우 프록시가 생성되지 않거나 정상 동작하지 않는다.
+- 그러나 이 부분은 크게 문제가 되지 않는게, 프레임워크 같은 개발이 아니라 일반적인 웹 애플리케이션을 개발할 때 `final`키워드를 잘 사용하지 않는다.
+
+### 프록시 기술과 한계 - 스프링의 해결책
+
+1. **스프링 3.2, CGLIB를 스프링 내부에 함께 패키징**
+2. **CGLIB 기본 생성자 필수 문제 해결**
+	- 스프링 4.0부터 `CGLIB`의 기본 생성자가 필수인 문제가 해결되었는데 `objenesis`라는 특별한 라이브러리를 사용해서 기본 생성자 없이 객체 생성이 가능해졌다.
+3. **생성자 2번 호출 문제**
+	- 이 역시 `objenesis`라는 특별한 라이브러리를 사용하여 해결되었다.
+4. **스프링 부트 2.0 - CGLIB 기본 사용**
+	- `CGLIB`의 문제점들을 특별한 라이브러리 선에서 전부 해결함으로써 스프링에선 `CGLIB`를 기본으로 사용하도록 했다.
+	- 물론 개발자에게 선택권을 주기 위해 `proxyTargetClass=true`설정을 열어주었다.
+		- `spring.aop.proxy-target-class=flase` -> `JDK 동적 프록시`
+
+- 남은 문제는 `final` 키워드를 사용할 수 없다는 문제인데, 프레임워크를 개발하는게 아닌 이상 일반적인 웹 애플리케이션 개발하는 입장에선 잘 사용하지 않지만, 이 부분만 생각하면서 사용하면 된다.
+-->
