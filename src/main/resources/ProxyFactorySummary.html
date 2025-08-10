@@ -1,0 +1,332 @@
+
+![[프록시 팩토리.png]]
+
+### 프록시 팩토리
+
+- JDK 동적 프록시와 CGLIB 두 기술을 함께 사용할 때 부가 기능을 적용하기 위해 JDK 동적 프록시가 제공하는 `InvocationHandler` 나 `MethodInterceptor`를 신경쓰지 않고, `Advice`만 만들면 된다.
+- 결과적으로 `InvocationHandler`,`MethodInterceptor`는 `Advice`를 호출하게 된다.
+- 프록시 팩토리를 사용하면 `Advice`를 호출하는 전용 `InvocationHandler`, `MethodInterceptor`를 내부에서 사용한다.
+
+![[프록시 팩토리 Advice.png]]
+- 특정 조건이 맞을 때 프록시 로직을 적용하는 기능도 공통으로 지원하는데 스프링은 `Pointcut`이라는 개념을 도입해서 이 문제를 일관성 있게 해결한다.
+
+### Advice
+
+- `Advice`를 만드는 방법은 여러가지가 있지만, 기본적인 방법은 다음 인터페이스를 구현하면 된다.
+```java
+@FunctionalInterface
+public interface MethodInterceptor extends Interceptor {
+@Nullable
+Object invoke(@Nonnull MethodInvocation invocation) throws Throwable;
+}
+```
+
+- `MethodInvocation invocation`
+- 내부에서 다음 메서드를 호출하는 방법, 현재 프록시 객체 인스턴스, `args`, 메서드 정보 등이 포함되어 있다. 기존 JDK 동적 프록시나 CGLIB로 구현할 때 파라미터로 제공되는 부분들이 이 안에 모두 추상화 되어있다고 생각하면 된다.
+
+```java
+public interface ServiceInterface {
+
+void save();
+
+void find();
+}
+
+...
+
+@Slf4j
+public class ServiceImpl implements ServiceInterface {
+
+@Override
+public void save() {
+log.info("save 호출");
+}
+
+@Override
+public void find() {
+log.info("find 호출");
+}
+}
+
+...
+
+@Slf4j
+@RequiredArgsConstructor
+public class TimeAdvice implements MethodInterceptor {
+
+@Override
+public Object invoke(MethodInvocation invocation) throws Throwable {
+log.info("TimeProxy 실행");
+long startTime = System.currentTimeMillis();
+
+Object result = invocation.proceed();
+
+long endTime = System.currentTimeMillis();
+
+log.info("TimeProxy 종료, resultTime={}", (endTime - startTime));
+return result;
+}
+}
+
+...
+
+@Test
+@DisplayName("인터페이스가 있으면 JDK 동적 프록시 사용")
+void interfaceProxy() {
+ServiceInterface target = new ServiceImpl();
+ProxyFactory proxyFactory = new ProxyFactory(target);
+proxyFactory.addAdvice(new TimeAdvice());
+ServiceInterface proxy = (ServiceInterface) proxyFactory.getProxy();
+
+log.info("targetClass={}", target.getClass());
+log.info("proxyClass={}", proxy.getClass());
+
+proxy.save();
+
+assertThat(AopUtils.isAopProxy(proxy)).isTrue(); // 프록시 팩토리로 만들어진 프록시만 프록시 여부를 확인할 수 있음
+assertThat(AopUtils.isJdkDynamicProxy(proxy)).isTrue(); // 프록시 팩토리로 만들어진 프록시만 프록시 여부를 확인할 수 있음
+assertThat(AopUtils.isCglibProxy(proxy)).isFalse(); // 프록시 팩토리로 만들어진 프록시만 프록시 여부를 확인할 수 있음
+
+}
+
+...
+
+@Test
+@DisplayName("구체 클래스만 있으면 CGLIB 사용")
+void concreteProxy() {
+ConcreteService target = new ConcreteService();
+ProxyFactory proxyFactory = new ProxyFactory(target);
+proxyFactory.addAdvice(new TimeAdvice());
+ConcreteService proxy = (ConcreteService) proxyFactory.getProxy();
+
+log.info("targetClass={}", target.getClass());
+log.info("proxyClass={}", proxy.getClass());
+
+proxy.call();
+
+assertThat(AopUtils.isAopProxy(proxy)).isTrue(); // 프록시 팩토리로 만들어진 프록시만 프록시 여부를 확인할 수 있음
+assertThat(AopUtils.isJdkDynamicProxy(proxy)).isFalse(); // 프록시 팩토리로 만들어진 프록시만 프록시 여부를 확인할 수 있음
+assertThat(AopUtils.isCglibProxy(proxy)).isTrue(); // 프록시 팩토리로 만들어진 프록시만 프록시 여부를 확인할 수 있음
+}
+
+...
+
+@Test
+@DisplayName("ProxyTargetClass 옵션을 사용하면 인터페이스가 있어도 CGLIB 를 사용하고, 클래스 기반 프록시 사용")
+void proxyTargetClass() {
+ServiceInterface target = new ServiceImpl();
+ProxyFactory proxyFactory = new ProxyFactory(target);
+proxyFactory.setProxyTargetClass(true); // 인터페이스가 있어도 CGLIB 로 매핑
+proxyFactory.addAdvice(new TimeAdvice());
+ServiceInterface proxy = (ServiceInterface) proxyFactory.getProxy();
+
+log.info("targetClass={}", target.getClass());
+log.info("proxyClass={}", proxy.getClass());
+
+proxy.save();
+
+assertThat(AopUtils.isAopProxy(proxy)).isTrue(); // 프록시 팩토리로 만들어진 프록시만 프록시 여부를 확인할 수 있음
+assertThat(AopUtils.isJdkDynamicProxy(proxy)).isFalse(); // 프록시 팩토리로 만들어진 프록시만 프록시 여부를 확인할 수 있음
+assertThat(AopUtils.isCglibProxy(proxy)).isTrue(); // 프록시 팩토리로 만들어진 프록시만 프록시 여부를 확인할 수 있음
+}
+```
+
+- 위 코드는 인터페이스로 구현 된 클래스를 타겟으로 프록시 팩토리에 주입했기에 JDK 동적 프록시로 자동 매핑이 되며 사용되는 구조이다.
+- 참고로 `AopUtils`에서 `isAopProxy`같은 메서드들은 프록시 팩토리로 만들어진 프록시 객체에만 적용된다.
+- 스프링 부트는 AOP를 적용할 때 기본적으로 `setProxyTargetClass(true)`로 설정해서 사용한다.
+- 따라서 인터페이스가 있어도 항상 CGLIB를 사용해서 구체 클래스를 기반으로 프록시를 생성한다.
+
+### 포인트컷, 어드바이스, 어드바이저
+
+- `포인트컷(pointcut)` : 어디에 부가 기능을 적용할지, 어디에 부가 기능을 적용하지 않을지 판단하는 필터링 로직이다. 주로 클래스와 메서드 이름으로 필터링한다. 이름 그대로 어떤 포인트(Point)에 기능을 적용할지 안 할지 잘라서(cut) 구분하는 것이다.
+
+- `어드바이스(Advice)` : 이전에 본 것 처럼 프록시가 호출하는 부가 기능이다. 단순하게 프록시 로직이라 생각하면 된다.
+
+- `어드바이저(Advisor)` : 단순하게 하나의 포인트컷과 하나의 어드바이스를 가지고 있는 것이다. 쉽게 이야기해서 **포인트컷1 + 어드바이스1** 이다.
+
+- 정리하면 부가 기능 로직을 적용해야 하는데, 포인트컷으로 어디에 적용을 할지 선택하고, 어드바이스로 어떤 로직을 적용할지 선택하는 것이다.
+- 그리고 어디에, 어떤 로직을 모두 알고 있는 것이 `어드바이저` 이다.
+
+- 조언(Advice)을 어디(Pointcut)에 할 것인가?
+- 조언자(Advisor)는 어디(Pointcut)에 조언(Advice)을 해야할지 알고 있다.
+
+#### 역할과 책임
+
+- 이렇게 구분한 역할과 책임을 명확하게 분리한 것이다.
+- 포인트컷은 대상 여부를 확인하는 필터 역할만 담당한다.
+- 어드바이스는 깔끔하게 부가 기능 로직만 담당한다.
+- 둘을 합치면 어드바이저가 된다. 스프링의 어드바이저는 하나의 포인트컷 + 하나의 어드바이저로 구성된다.
+
+### 프록시 팩토리 - 어드바이저 관계
+
+- 어드바이저는 내부에 포인트컷과 어드바이스를 모두 가지고있다.
+- 프록시 팩토리를 사용할 때 어드바이저는 필수이다.
+
+![[프록시 팩토리 - 어드바이저 관계.png]]
+
+```java
+@Test
+void advisorTest1() {
+ServiceInterface target = new ServiceImpl();
+ProxyFactory proxyFactory = new ProxyFactory(target);
+DefaultPointcutAdvisor advisor = new DefaultPointcutAdvisor(Pointcut.TRUE, new TimeAdvice());
+proxyFactory.addAdvisor(advisor);
+ServiceInterface proxy = (ServiceInterface) proxyFactory.getProxy();
+
+proxy.save();
+proxy.find();
+}
+```
+
+- 여기서 `Pointcut.TRUE`의 의미는 모든 필터를 허용하겠다. 라는 뜻이다.
+- 더 쉽게 풀이하면, 호출 된 메서드에 필터 없이 부가 기능을 적용하겠다. 라는 뜻으로 이해하면 된다.
+
+### 포인트컷
+
+- 위 서두에 작성한 것 처럼 포인트컷은 쉽게 말하면 필터를 걸어두는 것이다. 어디에 어떤 클래스 혹은 메서드로 들어왔을 때 어떻게 처리한다. 라는 것을 포인트컷으로 처리할 수 있다.
+
+```java
+public interface Pointcut {
+Pointcut TRUE = TruePointcut.INSTANCE;
+
+ClassFilter getClassFilter();
+
+MethodMatcher getMethodMatcher();
+}
+```
+
+## 스프링이 제공하는 포인트컷
+
+스프링은 무수히 많은 포인트컷을 제공한다.
+대표적인 몇 가지만 알아보자.
+###  `NameMatchMethodPointcut`
+
+- 메서드 이름을 기반으로 매칭한다.
+- 내부에서는 `PatternMatchUtils`를 사용한다.
+- 예: `*xxx*` 허용
+###  `JdkRegexpMethodPointcut`
+
+- JDK 정규 표현식을 기반으로 포인트컷을 매칭한다.
+
+###  `TruePointcut`
+
+- 항상 참을 반환한다.
+
+###  `AnnotationMatchingPointcut`
+
+- 애노테이션으로 매칭한다.
+
+###  `AspectJExpressionPointcut`
+
+- aspectJ 표현식으로 매칭한다.
+
+## 가장 중요한 것은 AspectJ 표현식
+
+- 여기에서는 사실 다른 것은 중요하지 않다. 실무에서는 사용하기도 편리하고 기능도 가장 많은 **aspectJ 표현식**을 기반으로 사용하는 `AspectJExpressionPointcut`을 사용하게 된다.
+
+- aspectJ 표현식 사용법을 중요하게 이후 AOP를 설명할 때 자세히 설명하겠다.  지금은 `Pointcut`의 동작 방식과 전체 구조에 집중하자.
+
+### 여러 어드바이저 적용
+
+```java
+@Slf4j
+static class Advice1 implements MethodInterceptor {
+
+@Override
+public Object invoke(MethodInvocation invocation) throws Throwable {
+log.info("advice1 호출");
+return invocation.proceed();
+}
+}
+
+@Slf4j
+static class Advice2 implements MethodInterceptor {
+
+@Override
+public Object invoke(MethodInvocation invocation) throws Throwable {
+log.info("advice2 호출");
+return invocation.proceed();
+}
+}
+
+...
+
+@Test
+@DisplayName("하나의 프록시, 여러 어드바이저")
+void multiAdvisorTest2() {
+// client -> proxy -> advisor2 -> advisor1-> target
+
+DefaultPointcutAdvisor advisor1 = new DefaultPointcutAdvisor(Pointcut.TRUE, new Advice1());
+DefaultPointcutAdvisor advisor2 = new DefaultPointcutAdvisor(Pointcut.TRUE, new Advice2());
+
+ServiceInterface target = new ServiceImpl();
+ProxyFactory proxyFactory = new ProxyFactory(target);
+proxyFactory.addAdvisor(advisor2);
+proxyFactory.addAdvisor(advisor1);
+ServiceInterface proxy = (ServiceInterface) proxyFactory.getProxy();
+
+// 실행
+proxy.save();
+}
+```
+
+- 스프링의 AOP를 처음 공부하거나 사용하면, AOP 적용 수 만큼 프록시가 생성된다고 착각하게 된다.
+- 스프링은 AOP를 적용할 때 최적화를 진행해서 지금처럼 프록시는 하나만 만들고, 하나의 프록시에 여러 어드바이저를 적용한다.
+- 정리하면 하나의 `target`에 여러 AOP가 동시에 적용되어도, 스프링의 AOP는 `target`마다 하나의 프록시만 생성한다. 이 부분은 중요하니 꼭 기억해두자
+
+### 실제 프록시 팩토리 사용 및 문제점
+
+```java
+@Slf4j
+@RequiredArgsConstructor
+@Configuration
+public class ProxyFactoryConfigV2 {
+
+@Bean
+public OrderControllerV2 orderControllerV2(LogTrace logTrace) {
+OrderControllerV2 orderController = new OrderControllerV2(orderServiceV2(logTrace));
+ProxyFactory factory = new ProxyFactory(orderController);
+factory.addAdvisor(getAdvisor(logTrace));
+OrderControllerV2 proxy = (OrderControllerV2) factory.getProxy();
+log.info("ProxyFactory proxy={}, target={}", proxy.getClass(), orderController.getClass());
+return proxy;
+}
+
+@Bean
+public OrderServiceV2 orderServiceV2(LogTrace logTrace) {
+OrderServiceV2 orderService = new OrderServiceV2(orderRepositoryV2(logTrace));
+ProxyFactory factory = new ProxyFactory(orderService);
+factory.addAdvisor(getAdvisor(logTrace));
+OrderServiceV2 proxy = (OrderServiceV2) factory.getProxy();
+log.info("ProxyFactory proxy={}, target={}", proxy.getClass(), orderService.getClass());
+return proxy;
+}
+
+@Bean
+public OrderRepositoryV2 orderRepositoryV2(LogTrace logTrace) {
+OrderRepositoryV2 orderRepository = new OrderRepositoryV2();
+ProxyFactory factory = new ProxyFactory(orderRepository);
+factory.addAdvisor(getAdvisor(logTrace));
+OrderRepositoryV2 proxy = (OrderRepositoryV2) factory.getProxy();
+log.info("ProxyFactory proxy={}, target={}", proxy.getClass(), orderRepository.getClass());
+return proxy;
+}
+
+private Advisor getAdvisor(LogTrace logTrace) {
+// pointcut
+NameMatchMethodPointcut pointcut = new NameMatchMethodPointcut();
+pointcut.setMappedNames("request*", "order*", "save*");
+
+// advice
+LogTraceAdvice advice = new LogTraceAdvice(logTrace);
+return new DefaultPointcutAdvisor(pointcut, advice);
+}
+}
+```
+
+- 클라이언트 코드들을 건들지 않고 부가 기능들을 프록시를 통해 추가하는 건 성공했는데, 문제점이 있다.
+- 첫 번째는 객체에 부가 기능들을 설정하려면, 너무 많은 설정들이 필요하다는 것
+- 예로 들면 100개의 객체에 부가 기능을 적용하려면 100개의 동적 프록시를 생성해야 한다는 것이다.
+- 두 번쨰는 컴포넌트 스캔으로 등록되었을 땐 프록시 적용이 불가능하다.
+- 왜냐하면 실제 객체를 컴포넌트 스캔으로 스프링 컨테이너에 스프링 빈으로 등록을 다 해버린 상태이기 때문이다.
+- 이러한 문제를 한 번에 해결할 수 있는 방법이 바로 [[AOP & 포인트컷 & 빈 후처리기 (BeanPostProcessor)]] 이다.
