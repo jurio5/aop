@@ -1,0 +1,218 @@
+### JDK 동적 프록시
+
+- 기존에는 프록시를 적용하기 위해선 프록시 클래스가 필요했고, 적용해야 할 객체가 수 십개 정도 된다면 그 만큼 프록시 객체 역시 동일하게 만들어줘야했다.
+- 이러한 문제를 해결할 수 있는게 동적 프록시 기술이다.
+- 동적 프록시 기술을 사용하면 개발자가 직접 프록시 클래스를 만들지 않아도 된다. 이름 그대로 프록시 객체를 동적으로 런타임에 개발자 대신 만들어주고 프록시에 원하는 실행 로직을 지정할 수 있다.
+- JDK 동적 프록시는 인터페이스를 기반으로 프록시를 동적으로 만들어주기에 인터페이스가 필수이다.
+
+---
+- JDK 동적 프록시에 적용할 로직은 `InvocationHandler`인터페이스를 구현해서 작성하면 된다.
+```java
+public interface InvacationHandler {
+public Object invoke(Object proxy, Method method, Object[] args)
+throws Throwable;
+}
+```
+
+- 제공되는 파라미터는 다음과 같다.
+- `Object proxy` : 프록시 자신
+- `Method method` : 호출한 메서드
+- `Object[] args` : 메서드를 호출할 때 전달한 인수
+
+```java
+@RequiredArgsConstructor
+@Slf4j
+public class TimeInvocationHandler implements InvocationHandler {
+
+private final Object target;
+
+@Override
+public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+log.info("TimeProxy 실행");
+long startTime = System.currentTimeMillis();
+
+Object result = method.invoke(target, args);
+
+long endTime = System.currentTimeMillis();
+
+log.info("TimeProxy 종료, resultTime={}", (endTime - startTime));
+return result;
+}
+```
+
+- JDK 동적 프록시를 사용하기 위해선 `InvocationHandler` 인터페이스를 구현해야 하는데, 이 부분은 핵심 기능과 부가 기능들을 하나의 구현 프록시로 해결하면서 동적으로 처리할 수 있게된다.
+
+```java
+@Test
+void dynamicA() {
+AInterface target = new AImpl();
+
+TimeInvocationHandler handler = new TimeInvocationHandler(target);
+
+AInterface proxy = (AInterface) Proxy.newProxyInstance(AInterface.class.getClassLoader(), new Class[]{AInterface.class}, handler);
+
+proxy.call();
+log.info("targetClass={}", target.getClass());
+log.info("proxyClass={}", proxy.getClass());
+}
+```
+
+- 단순하게 `target`만 `TimeInvocationHandler`에 주입을 해주면 핸들러가 만들어지고, 인터페이스 클래스 로더와, 클래스 배열을 만든 뒤 해당 타겟 인터페이스를 주입 후 핸들러를 넣으면 자동으로 동적 프록시가 생성되며, `newProxyInstance`자체가 `Object` 타입 이기에 주입 한 인터페이스를 형변환 해주면 해당 인터페이스의 메서드를 사용할 수 있게 되면서 핸들러에 주입 한 `target`의 구현체의 메서드가 실행된다.
+
+```java
+
+@Slf4j
+@RequiredArgsConstructor
+public class LogTraceBasicHandler implements InvocationHandler {
+
+private final Object target;
+private final LogTrace logTrace;
+
+@Override
+public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+TraceStatus status = null;
+try {
+String message = method.getDeclaringClass().getSimpleName() + "." + method.getName() + "()";
+status = logTrace.begin(message);
+// target 호출
+Object result = method.invoke(target, args);
+logTrace.end(status);
+return result;
+} catch (Exception e) {
+logTrace.exception(status, e);
+throw e;
+}
+}
+}
+
+...
+
+@Configuration
+public class DynamicProxyBasicConfig {
+
+@Bean
+public OrderControllerV1 orderControllerV1(LogTrace logTrace) {
+OrderControllerV1Impl orderController = new OrderControllerV1Impl(orderServiceV1(logTrace));
+
+OrderControllerV1 proxy = (OrderControllerV1) Proxy.newProxyInstance(OrderControllerV1.class.getClassLoader(),
+new Class[]{OrderControllerV1.class},
+new LogTraceBasicHandler(orderController, logTrace));
+
+return proxy;
+}
+
+@Bean
+public OrderServiceV1 orderServiceV1(LogTrace logTrace) {
+OrderServiceV1Impl orderService = new OrderServiceV1Impl(orderRepositoryV1(logTrace));
+
+OrderServiceV1 proxy = (OrderServiceV1) Proxy.newProxyInstance(OrderServiceV1.class.getClassLoader(),
+new Class[]{OrderServiceV1.class},
+new LogTraceBasicHandler(orderService, logTrace));
+
+return proxy;
+}
+
+@Bean
+public OrderRepositoryV1 orderRepositoryV1(LogTrace logTrace) {
+OrderRepositoryV1Impl orderRepository = new OrderRepositoryV1Impl();
+
+OrderRepositoryV1 proxy = (OrderRepositoryV1) Proxy.newProxyInstance(OrderRepositoryV1.class.getClassLoader(),
+new Class[]{OrderRepositoryV1.class},
+new LogTraceBasicHandler(orderRepository, logTrace));
+
+return proxy;
+}
+}
+```
+
+- 실제 애플리케이션에 빈으로 등록하여 사용 시 서로 단방향으로 연결 된 프록시를 호출하며 정상적인 흐름으로 처리
+- 단, 현재 같은 경우는 `LogTraceBasicHandler`의 경우 새로운 객체들을 계속 만들어줘야 하기에 새로운 인스턴스를 만들어야 함
+
+![[JDK 동적 프록시.png]]
+
+### JDK 동적 프록시 필터
+
+- 프록시의 경우 크게 두 가지의 주요 기능이 있는데 첫 번째는 프록시 패턴을 사용한 접근 제어, 두 번째는 데코레이션 패턴을 사용하는 새로운 부가 기능 추가를 통한 방식이 있다.
+- 현재의 부가 기능들을 보면 HTTP 파라미터 요청 시 부가 기능인 로그를 출력하고 실행 시간을 결과로 반환하는 방식으로 부가 기능을 추가했는데, 접근 제어를 통해 지정한 패턴이 아닐 시 접근되지 않게끔 설정하는 방식도 JDK 동적 프록시 역시 프록시 이기에 유효하다.
+
+```java
+@Slf4j
+@RequiredArgsConstructor
+public class LogTraceFilterHandler implements InvocationHandler {
+
+private final Object target;
+private final LogTrace logTrace;
+private final String[] patterns;
+
+@Override
+public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+
+// 메서드 이름 필터
+String methodName = method.getName();
+
+// save, request, reque*, *est 등
+if (!PatternMatchUtils.simpleMatch(patterns, methodName)) {
+return method.invoke(target, args);
+}
+
+TraceStatus status = null;
+try {
+String message = method.getDeclaringClass().getSimpleName() + "." + method.getName() + "()";
+status = logTrace.begin(message);
+// target 호출
+Object result = method.invoke(target, args);
+logTrace.end(status);
+return result;
+} catch (Exception e) {
+logTrace.exception(status, e);
+throw e;
+}
+}
+}
+
+...
+
+@Configuration
+public class DynamicProxyFilterConfig {
+
+private static final String[] PATTERNS = {"request*", "order*", "save*"};
+
+@Bean
+public OrderControllerV1 orderControllerV1(LogTrace logTrace) {
+OrderControllerV1Impl orderController = new OrderControllerV1Impl(orderServiceV1(logTrace));
+
+OrderControllerV1 proxy = (OrderControllerV1) Proxy.newProxyInstance(OrderControllerV1.class.getClassLoader(),
+new Class[]{OrderControllerV1.class},
+new LogTraceFilterHandler(orderController, logTrace, PATTERNS));
+
+return proxy;
+}
+
+@Bean
+public OrderServiceV1 orderServiceV1(LogTrace logTrace) {
+OrderServiceV1Impl orderService = new OrderServiceV1Impl(orderRepositoryV1(logTrace));
+
+OrderServiceV1 proxy = (OrderServiceV1) Proxy.newProxyInstance(OrderServiceV1.class.getClassLoader(),
+new Class[]{OrderServiceV1.class},
+new LogTraceFilterHandler(orderService, logTrace, PATTERNS));
+
+return proxy;
+}
+
+@Bean
+public OrderRepositoryV1 orderRepositoryV1(LogTrace logTrace) {
+OrderRepositoryV1Impl orderRepository = new OrderRepositoryV1Impl();
+
+OrderRepositoryV1 proxy = (OrderRepositoryV1) Proxy.newProxyInstance(OrderRepositoryV1.class.getClassLoader(),
+new Class[]{OrderRepositoryV1.class},
+new LogTraceFilterHandler(orderRepository, logTrace, PATTERNS));
+
+return proxy;
+}
+}
+```
+
+### JDK 동적 프록시의 한계
+
+- JDK 동적 프록시는 서두에서 작성한 것 처럼 인터페이스가 필수이다.
+- 그렇다면 인터페이스 없이 클래스만 있는 경우에는 어떻게 동적 프록시를 적용할 수 있는지 고민을 해보면, 일반적으로는 많이 어렵고 이를 위해 존재하는 `CGLIB` 라는 바이트 코드를 조작하는 특별한 라이브러리를 사용해야 한다. [[CGLIB]]
