@@ -1,0 +1,301 @@
+
+### within
+
+```java
+@Test
+void withinExact() {
+pointcut.setExpression("within(hello.aop.member.MemberServiceImpl)");
+assertThat(pointcut.matches(helloMethod, MemberServiceImpl.class)).isTrue();
+}
+
+@Test
+void withinStar() {
+pointcut.setExpression("within(hello.aop.member.*Service*)");
+assertThat(pointcut.matches(helloMethod, MemberServiceImpl.class)).isTrue();
+}
+
+@Test
+void withinSubPackage() {
+pointcut.setExpression("within(hello.aop..*)");
+assertThat(pointcut.matches(helloMethod, MemberServiceImpl.class)).isTrue();
+}
+
+@Test
+@DisplayName("타겟의 타입에만 직접 적용, 인터페이스를 선정하면 안된다.")
+void withinSuperTypeFalse() {
+pointcut.setExpression("within(hello.aop.member.MemberService)");
+assertThat(pointcut.matches(helloMethod, MemberServiceImpl.class)).isFalse();
+}
+```
+
+- 타입을 하나만 지정할 수 있고, `execution`과는 다르게 부모 타입을 지정할 수 없어서 별로 사용하지 않음
+
+### args
+
+```java
+@Test
+void args() {
+// hello(String)과 매칭
+assertThat(pointcut("args(String)")
+.matches(helloMethod, MemberServiceImpl.class)).isTrue();
+assertThat(pointcut("args(Object)")
+.matches(helloMethod, MemberServiceImpl.class)).isTrue();
+assertThat(pointcut("args()")
+.matches(helloMethod, MemberServiceImpl.class)).isFalse();
+assertThat(pointcut("args(..)")
+.matches(helloMethod, MemberServiceImpl.class)).isTrue();
+assertThat(pointcut("args(*)")
+.matches(helloMethod, MemberServiceImpl.class)).isTrue();
+assertThat(pointcut("args(String, ..)")
+.matches(helloMethod, MemberServiceImpl.class)).isTrue();
+}
+
+/**
+* execution(* *(java.io.Serializable)) : 메서드의 시그니처로 판단 (정적) * args(java.io.Serializable) : 런타임에 전달된 인수로 판단 (동적) */
+@Test
+void argsVsExecution() {
+// Args
+assertThat(pointcut("args(String)")
+.matches(helloMethod, MemberServiceImpl.class)).isTrue();
+assertThat(pointcut("args(java.io.Serializable)")
+.matches(helloMethod, MemberServiceImpl.class)).isTrue();
+assertThat(pointcut("args(Object)")
+.matches(helloMethod, MemberServiceImpl.class)).isTrue();
+
+// Execution
+assertThat(pointcut("execution(* *(String))")
+.matches(helloMethod, MemberServiceImpl.class)).isTrue();
+assertThat(pointcut("execution(* *(java.io.Serializable))") // 매칭 실패
+.matches(helloMethod, MemberServiceImpl.class)).isFalse();
+assertThat(pointcut("execution(* *(Object))") // 매칭 실패
+.matches(helloMethod, MemberServiceImpl.class)).isFalse();
+}
+```
+
+- 자바가 기본으로 제공하는 `String`은 `Object`,`java.io.Serializable`의 하위 타입이다.
+- `execution`은 부모 타입을 파라미터로 받을 때 정확히 받아야하지만 (정적), `args`는 부모 타입을 허용하기에 매칭에 성공한다. (동적)
+
+### @target,@within
+
+- `@target`은 인스턴스의 모든 메서드를 조인 포인트로 적용한다.
+- `@within은` 해당 타입 내에 있는 메서드만 조인 포인트로 적용한다.
+
+- 쉽게 이야기해서 `@target`은 부모 클래스의 메서드까지 어드바이스를 다 적용하고, `@within`은 자기 자신의 클래스에 정의된 메서드에만 어드바이스를 적용한다.
+
+![[@target @within 비교.png]]
+
+- 다음 포인트컷 지시자는 단독으로 사용하면 안된다. `args`, `@args`, `@target` 이번 예제를 보면 `execution(* hello.aop..*(..))`를 통해 적용 대상을 줄여준 것을 확인할 수 있다.
+- `args`, `@args`, `@target`은 실제 객체 인스턴스가 생성되고 실행될 때 어드바이스 적용 여부를 확인할 수 있다.
+
+- 실행 시점에 일어나는 포인트컷 적용 여부도 결국 프록시가 있어서 실행 시점에 판단할 수 있다. 프록시가 없다면 판단 자체가 불가능하다. 그런데 스프링 컨테이너가 프록시를 생성하는 시점은 스프링 컨테이너가 만들어지는 애플리케이션 로딩 시점에 적용할 수 있다. 따라서 `args`, `@args`, `@target` 같은 포인트컷 지시자가 있으면 스프링은 모든 스프링 빈에 AOP를 적용하려고 시도한다. 앞서 설명한 것처럼 프록시가 없으면 실행 시점에 판단 자체가 불가능하다.
+
+- 문제는 이렇게 모든 스프링 빈에 AOP 프록시를 적용하려고 하면 스프링이 내부에서 사용하는 빈 중에는 `final`로 지정된 빈들도 있기 때문에 오류가 발생할 수 있다.
+
+- 따라서 이러한 표현식은 최대한 프록시 적용 대상을 축소하는 표현식과 함께 사용해야 한다.
+
+### @annotation, @args
+
+```java
+@Target(ElementType.METHOD)
+@Retention(RetentionPolicy.RUNTIME)
+public @interface MethodAop {
+String value();
+}
+
+...
+
+@Test
+void success() {
+log.info("memberService Proxy={}", memberService.getClass());
+memberService.hello("hello");
+}
+
+@Slf4j
+@Aspect
+static class AtAnnotationAspect {
+
+@Around("@annotation(hello.aop.member.annotation.MethodAop)")
+public Object doAtAnnotation(ProceedingJoinPoint joinPoint) throws Throwable {
+log.info("[@annotation] {}", joinPoint.getSignature());
+return joinPoint.proceed();
+}
+}
+```
+
+- `@annotation` : 메서드가 주어진 어노테이션을 가지고 있는 조인 포인트를 매칭
+- `@args` : 전달된 실제 인수의 런타임 타입이 주어진 타입의 어노테이션을 갖는 조인 포인트
+- 예로 들어 전달된 인수의 런타임 타입에 `@Check`어노테이션이 있는 경우에 매칭한다.
+- `@args(test.Check)`
+- 잘 사용하지 않는다.
+
+### bean
+
+```java
+@Test
+void success() {
+orderService.orderItem("itemA");
+}
+
+@Aspect
+static class BeanAspect {
+
+@Around("bean(orderService) || bean(*Repository)")
+public Object doLog(ProceedingJoinPoint joinPoint) throws Throwable {
+log.info("[bean] {}", joinPoint.getSignature());
+return joinPoint.proceed();
+}
+}
+```
+
+- `bean` : 스프링 전용 포인트컷 지시자로서 빈의 이름을 지정한다.
+- 스프링 빈의 이름으로 AOP 적용 여부를 지정한다.
+- 스프링에서만 사용할 수 있는 특별한 지시자이다.
+- `bean(orderService || bean(*Repository))`
+- `*`과 같은 패턴을 사용할 수 있다.
+- 이 지시자도 잘 사용하진 않지만 개발하는 상황에 따라 사용할 수 있다.
+
+### 매개변수 전달
+
+- `this, target, args, @target, @within, @annotation, @args` 같은 표현식을 사용해서 어드바이스에 매개변수를 전달할 수 있다.
+
+```java
+@Before("allMember() && args(arg,..)") // 타입 제한 (String)
+public void logArgs3(String arg) { // 타입 제한
+log.info("[logArgs3] arg={}", arg);
+}
+```
+
+- 포인트컷의 이름과 매개변수의 이름을 맞춰야 한다.
+- 추가로 타입이 메서드에 지정한 타입으로 제한된다.
+- `args(arg,...) -> args(String, ...)`
+
+```java
+@Target(ElementType.METHOD)
+@Retention(RetentionPolicy.RUNTIME)
+public @interface MethodAop {
+String value();
+}
+
+...
+
+public interface MemberService {
+String hello(String param);
+}
+
+...
+
+
+@ClassAop
+@Component
+public class MemberServiceImpl implements MemberService {
+
+@Override
+@MethodAop("test value")
+public String hello(String param) {
+return "ok";
+}
+
+public String internal(String param) {
+return "ok";
+}
+}
+
+...
+
+@Test
+void success() {
+log.info("memberService Proxy={}", memberService.getClass());
+memberService.hello("helloA");
+}
+
+...
+
+@Slf4j
+@Aspect
+static class ParameterAspect {
+
+@Pointcut("execution(* hello.aop.member..*.*(..))")
+private void allMember() {
+}
+@Around("allMember()")
+public Object logArgs1(ProceedingJoinPoint joinPoint) throws Throwable {
+Object arg1 = joinPoint.getArgs()[0];
+log.info("[logArgs1] {}, arg={}", joinPoint.getSignature(), arg1);
+return joinPoint.proceed();
+}
+
+@Around("allMember() && args(arg,..)")
+public Object logArgs2(ProceedingJoinPoint joinPoint, Object arg) throws Throwable {
+log.info("[logArgs2] {}, arg={}", joinPoint.getSignature(), arg);
+return joinPoint.proceed();
+}
+
+@Before("allMember() && args(arg,..)")
+public void logArgs3(String arg) {
+log.info("[logArgs3] arg={}", arg);
+}
+
+@Before("allMember() && this(obj)") // 실제 대상 타겟이 아닌 프록시를 호출
+public void thisArgs(JoinPoint joinPoint, MemberService obj) {
+log.info("[this] {}, obj={}", joinPoint.getSignature(), obj.getClass());
+}
+
+@Before("allMember() && target(obj)") // 실제 대상 타겟을 호출
+public void targetArgs(JoinPoint joinPoint, MemberService obj) {
+log.info("[target] {}, obj={}", joinPoint.getSignature(), obj.getClass());
+}
+
+@Before("allMember() && @target(annotation)")
+public void atTarget(JoinPoint joinPoint, ClassAop annotation) {
+log.info("[@target] {}, obj={}", joinPoint.getSignature(), annotation);
+}
+
+@Before("allMember() && @within(annotation)")
+public void atWithin(JoinPoint joinPoint, ClassAop annotation) {
+log.info("[@within] {}, obj={}", joinPoint.getSignature(), annotation);
+}
+
+@Before("allMember() && @annotation(annotation)") // 어노테이션의 벨류 값을 파라미터로 넘길 수 있음
+public void atAnnotation(JoinPoint joinPoint, MethodAop annotation) {
+log.info("[@annotation] {}, annotationValue={}", joinPoint.getSignature(), annotation.value());
+}
+}
+```
+
+- `logArgs1`: `joinPoint.getArgs()[0]`와 같이 매개변수를 전달 받는다.
+- `logArgs2`: `args(arg,..)`와 같이 매개변수를 전달 받는다.
+- `logArgs3`: `@Before`를 사용한 축약 버전이다. 추가로 타입을 `String`으로 제한했다.
+- `this`: 프록시 객체를 전달 받는다.
+- `target`: 실제 대상 객체를 전달 받는다.
+- `@target`, `@within`: 타입의 애노테이션을 전달 받는다.
+- `@annotation`: 메서드의 애노테이션을 전달 받는다. 여기서는 `annotation.value()`로 해당 애노테이션의 값을 출력하는 모습을 확인할 수 있다.
+
+### this, target
+
+- `this` : 스프링 빈 객체(스프링 AOP 프록시)를 대상으로 하는 조인 포인트
+- `target` : Target 객체(스프링 AOP 프록시가 가르키는 실제 대상)를 대상으로 하는 조인 포인트
+- `this`,`target`은 다음과 같이 적용 타입 하나를 정확하게 지정해야 한다.
+
+```java
+this(hello.aop.member.MemberService)
+target(hello.aop.member.MemberService)
+```
+
+- `*`같은 패턴을 사용할 수 없다.
+- 부모 타입을 허용한다.
+
+- JDK 동적 프록시의 경우 (`MemberServiceImpl 구체 클래스 지정)
+- `this(hello.aop.member.MemberServiceImpl)` : proxy 객체를 보고 판단한다. JDK 동적 프록시로 만들어진 proxy 객체는 `MemberService` 인터페이스를 기반으로 구현된 새로운 클래스다. 따라서 `MemberServiceImpl`를 전혀 알지 못하므로 `AOP 적용 대상이 아니다.`
+- `target(hello.aop.member.MemberServiceImpl)` : target 객체를 보고 판단한다. target 객체가 `MemberServiceImpl`타입이므로 `AOP 적용 대상이다.`
+- CGLIB의 경우 (`MemberService 인터페이스 지정`)
+- `this(hello.aop.member.MemberService)` : proxy 객체를 보고 판단한다. `this`는 부모 타입을 허용하기 때문에 `AOP가 적용된다.`
+- `target(hello.aop.member.MemberService)` : target 객체를 보고 판단한다. `this`는 부모 타입을 허용하기 때문에 `AOP가 적용된다.`
+- CGLIB의 경우 (`MemberServiceImpl 구체 클래스 지정`)
+- `this(hello.aop.member.MemberServiceImpl)` : proxy 객체를 보고 판단한다. CGLIB로 만들어진 proxy 객체는 `MemberServiceImpl`를 상속 받아서 만들었기 때문에 `AOP가 적용된다.` `this`가 부모 타입을 허용하기 때문에 포인트컷의 대상이 되기 때문이다.
+- `target(hello.aop.member.MemberServiceImpl)` : target 객체를 보고 판단한다. target 객체가 `MemberServiceImpl`타입이므로 `AOP 적용 대상이다.`
+
+- `spring.aop.proxy-target-class=true` : CGLIB (Spring boot default)
+* `spring.aop.proxy-target-class=false` : JDK 동적 프록시
+
+- 이 부분들을 쉽게 정리하면 `JDK 동적 프록시`의 경우 인터페이스가 있어야 프록시를 생성할 수 있고 `this` 지시자를 사용 시 구체 클래스를 타입으로 지정을 하면 AOP를 지정할 수 없고, 인터페이스로 지정을 한다면 AOP를 지정할 수 있게된다.
+- `CGLIB`의 경우 기본적으로 프록시 대상의 타겟을 대상으로 하기에 `target` 지시자를 사용 시 `target`은 구체 클래스를 호출하고, 인터페이스 혹은 구체 클래스를 타입으로 지정하여도 전부 AOP로 지정할 수 있다.
