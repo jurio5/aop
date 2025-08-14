@@ -1,0 +1,801 @@
+
+### 빈 후처리기
+
+- `@Bean`이나 컴포넌트 스캔으로 스프링 빈을 등록하면, 스프링은 대상 객체를 생성하고 스프링 컨테이너 내부의 빈 저장소에 등록한다. 그리고 이후에는 스프링 컨테이너를 통해 등록한 스프링 빈을 조회해서 사용하면 된다.
+- 스프링이 빈 저장소에 등록할 목적으로 생성한 객체를 빈 저장소에 등록하기 직전에 조작하고 싶다면 빈 후처리기를 사용하면 된다.
+- `빈 포스트 프로세서(BeanPostProcessor)`는 번역하면 빈 후처리기인데, 이름 그대로 빈을 생성한 후에 무언가를 처리하는 용도로 사용한다.
+
+### 빈 후처리기 기능
+
+- 빈 후처리기의 기능은 막강하다.
+- 객체를 조작할 수도 있고, 완전히 다른 객체로 바꿔치기 하는 것도 가능하다.
+
+![[빈 후처리기 과정.png]]
+
+
+### BeanPostProcessor 인터페이스
+
+```java
+public interface BeanPostProcessor {
+@Nullable
+default Object postProcessBeforeInitialization(Object bean, String beanName) throws BeansException {
+return bean;
+}
+
+@Nullable
+default Object postProcessAfterInitialization(Object bean, String beanName) throws BeansException {
+return bean;
+}
+}
+```
+
+- 빈 후처리기를 사용하려면 `BeanPostProcessor`인터페이스를 구현하고, 스프링 빈으로 등록하면 된다.
+- `postProcessBeforeInitialization` : 객체 생성 이후에 `@PostConstruct`같은 초기화가 발생하기 전에 호출되는 포스트 프로세서이다.
+- `postProcessAfterInitialization` : 객체 생성 이후에 `@PostConstruct`같은 초기화가 발생한 다음에 호출되는 포스트 프로세서이다.
+
+```java
+@Slf4j
+static class AToBPostProcessor implements BeanPostProcessor {
+
+@Override
+public Object postProcessAfterInitialization(Object bean, String beanName) throws BeansException {
+log.info("beanName={}, bean={}", beanName, bean);
+if (bean instanceof A) {
+return new B();
+}
+return bean;
+}
+}
+
+...
+
+@Slf4j
+@Configuration
+static class BeanPostProcessorConfig {
+@Bean(name = "beanA")
+public A a() {
+return new A();
+}
+
+@Bean
+public AToBPostProcessor helloPostProcessor() {
+return new AToBPostProcessor();
+}
+}
+
+...
+
+@Test
+void basicConfig() {
+ApplicationContext applicationContext = new AnnotationConfigApplicationContext(BeanPostProcessorConfig.class);
+
+// beanA 이름으로 B 객체가 빈으로 등록된다.
+B b = applicationContext.getBean("beanA", B.class);
+b.helloB();
+
+// A는 빈으로 등록되지 않는다.
+assertThrows(NoSuchBeanDefinitionException.class, () -> applicationContext.getBean(A.class));
+}
+```
+
+- 최종적으로 `beanA`라는 스프링 빈 이름에 `A` 객체 대신에 `B` 객체가 등록된다.
+- `A` 객체는 `bean instanceof A` 이 코드에서 형 변환을 통해 `A`객체가 들어오면 `B`객체로 만들어서 리턴하는 조건 때문에 `A` 객체의 경우 스프링 빈으로 등록조차 되지 않는다.
+
+![[빈 후처리기 프록시 적용.png]]
+
+### 직접 구현한 빈 후처리기 정리
+
+- 빈 후처리기는 빈을 조작하고 변경할 수 있는 후킹 포인트이다.
+- 이 것은 빈 객체를 조작하거나 심지어 다른 객체로 바꾸어 버릴 수 있을 정도로 막강하다.
+- 여기서 조작이라는 것은 해당 객체의 특정 메서드를 호출하는 것을 뜻한다.
+- 일반적으로 스프링 컨테이너가 등록하는, 특히 컴포넌트 스캔의 대상이 되는 빈들은 중간에 조작할 방법이 없는데, 빈 후처리기를 사용하면 개발자가 등록하는 모든 빈을 중간에 조작할 수 있다.
+- 이 말은 `빈 객체를 프록시로 교체`하는 것도 가능하다는 뜻이다.
+
+- 참고로 `@PostConstruct`에는 동작의 비밀이 있는데 `@PostConstruct`는 스프링 빈 생성 이후에 빈을 초기화 하는 역할을 한다. 그런데 생각해보면 빈의 초기화 라는 것이 단순히 `@PostConstruct` 애노테이션이 붙은 초기화 메서드를 한 번 호출만 하면 된다. 쉽게 이야기해서 생성된 빈을 한 번 조작하는 것이다. 따라서 빈을 조작하는 행위를 하는 적절한 빈 후처리기가 있으면 될 것 같다.
+- 스프링은 `CommonAnnotationBeanPostProcessor`라는 빈 후처리기를 자동으로 등록하는데, 여기에서 `@PostConstruct` 애노테이션이 붙은 메서드를 호출한다. 스프링 스스로도 스프링 내부의 기능을 확잘하기 위해 빈 후처리기를 사용하는 것이다.
+
+### 빈 후처리기 적용
+
+```java
+@RequiredArgsConstructor
+@Slf4j
+public class PackageLogTracePostProcessor implements BeanPostProcessor {
+
+private final String basePackage;
+private final Advisor advisor;
+
+@Override
+public Object postProcessAfterInitialization(Object bean, String beanName) throws BeansException {
+log.info("param beanName={}, bean={}", beanName, bean.getClass());
+
+// 프록시 적용 대상 여부 체크
+// 프록시 적용 대상이 아니면 원본을 그대로 진행
+String packageName = bean.getClass().getPackageName();
+if (!packageName.startsWith(basePackage)) {
+return bean;
+}
+
+// 프록시 대상이면 프록시를 만들어서 반환
+ProxyFactory proxyFactory = new ProxyFactory(bean);
+proxyFactory.addAdvisor(advisor);
+Object proxy = proxyFactory.getProxy();
+log.info("create proxy: target={}, proxy={}", bean.getClass(), proxy.getClass());
+return proxy;
+}
+}
+
+...
+
+@Configuration
+@Slf4j
+@Import({AppV1Config.class, AppV2Config.class})
+public class BeanPostProcessorConfig {
+
+@Bean
+public PackageLogTracePostProcessor logTracePostProcessor(LogTrace logTrace) {
+return new PackageLogTracePostProcessor("hello.proxy.app", getAdvisor(logTrace));
+}
+
+private Advisor getAdvisor(LogTrace logTrace) {
+// pointcut
+NameMatchMethodPointcut pointcut = new NameMatchMethodPointcut();
+pointcut.setMappedNames("request*", "order*", "save*");
+
+// advice
+LogTraceAdvice advice = new LogTraceAdvice(logTrace);
+return new DefaultPointcutAdvisor(pointcut, advice);
+}
+}
+```
+
+- 서두에서 빈 후처리기가 지원하는 기능 중 가장 강력한 기능은 컴포넌트 스캔이나 빈으로 등록 된 객체들을 조작하거나 다른 객체로 바꿔버릴 수 있다는 점 이라고 했다.
+- 특히 빈 으로 등록되거나 컴포넌트 스캔으로 등록되는 경우는 직접적으로 개입할 수 없다는 문제 때문에 기존 프록시를 사용할 땐 불편함이 있었는데, 이 문제를 빈 후처리기를 도입함으로써 해결할 수 있게 되었는데, 그 방식은 위 코드처럼 빈 저장소에 들어가기 전에 빈 후처리기가 후킹을 하여 정보를 가공하고 조작하거나 객체를 바꿔치거나 하는 여러가지 행위를 한 뒤에 빈 저장소에 배치할 수 있다는 점이다.
+- 기존에는 프록시를 적용시킬 객체를 빈으로 등록시킴과 동시에 프록시 객체를 만들어줬어야 했으며, 컴포넌트 스캔으로 관리 할 경우 프록시로 등록할 수 없다는 부분을 빈 후처리기를 도입함으로써 이러한 문제들이 스프링 빈 저장소에 등록하기 전에 바꿔치게 되면서 하나의 프록시로 관리할 수 있게 되었다.
+- 위 코드의 예시에는 베이스 패키지 경로를 기준으로 프록시 적용 대상 여부를 설정했는데, 프록시의 포인트컷을 이용하면 더욱 정밀하게 필터를 설정할 수 있다. 포인트컷은 이미 클래스, 메서드 단위의 필터 기능을 가지고 있기 때문이다. 결론은 어드바이저는 하나의 어드바이스와 포인트컷을 가지고 있으며, 어드바이저의 포인트컷 설정을 통하여 적용 대상 여부를 체크 할 수 있다는 것이다.
+- 참고로, 스프링 AOP는 포인트컷을 사용해서 프록시 적용 대상 여부를 체크한다.
+- 그러나 이러한 빈 후처리기를 직접 개발자가 구현을 해서 사용하고 유지보수를 하려면 꽤 귀찮은 작업이 될 수 있는데, 이 부분까지 스프링은 프록시를 생성하기 위한 빈 후처리기를 이미 만들어서 제공하고 있다.
+
+### 스프링이 제공하는 빈 후처리기
+
+```java
+implementation 'org.springframework.boot:spring-boot-starter-aop'
+```
+
+- 이 라이브러리를 추가하면 `aspectjweaver`라는 `aspectJ`관련 라이브러리를 등록하고, 스프링 부트가 AOP 관련 클래스를 자동으로 스프링 빈에 등록한다.
+- 스프링 부트가 없던 시절에는 `@EnableAspectJAutoProxy`를 직접 사용해야 했는데, 이 부분을 스프링 부트가 자동으로 처리해준다.
+- 자동 프록시 생성시 - `AutoProxyCreator(AnnotationAwareAspectJAutoProxyCreator)`라는 빈 후처리기가 스프링 빈에 자동으로 등록된다.
+- 이 빈 후처리기는 스프링 빈으로 등록된 `Advisor`들을 자동으로 찾아서 프록시가 필요한 곳에 자동으로 프록시를 적용해준다.
+- `Advisor`안에는 `포인트컷`과 `어드바이스`가 이미 모두 포함되어 있다. 따라서 `Advisor`만 알고 있으면 그 안에 있는 포인트컷으로 어떤 스프링 빈에 프록시를 적용해야 할지 알 수 있다. 그리고 어드바이스로 부가 기능을 적용하면 된다.
+- `AnnotationAwareAspectJAutoProxyCreator`는 `@AspectJ`와 관련된 AOP 기능도 자동으로 찾아서 처리해준다. `Advisor`는 물론이고, `@Aspect`도 자동으로 인식해서 프록시를 만들고 AOP를 적용해준다.
+
+![[AOP 자동 프록시 생성기.png]]
+
+##  중요: 포인트컷은 2가지에 사용된다.
+
+### 1. 프록시 적용 여부 판단 - 생성 단계
+
+- 자동 프록시 생성기는 포인트컷을 사용해서 해당 빈이 프록시를 생성할 필요가 있는지 없는지 체크한다.
+
+- 클래스 + 메서드 조건을 모두 비교한다. 이때 모든 메서드를 체크하는데, 포인트컷 조건에 하나라도 매칭해 본다.
+→ **만약 조건에 맞는 것이 하나라도 있으면 프록시를 생성한다.**
+
+- 예) `orderControllerV1`은 `request()`, `noLog()`가 있다. 여기에서 `request()`가 조건에 만족하므로 프록시를 생성한다.
+
+- 만약 조건에 맞는 것이 하나도 없으면 프록시를 생성할 필요가 없으므로 프록시를 생성하지 않는다.
+
+
+---
+
+### 2. 어드바이스 적용 여부 판단 - 사용 단계
+
+- 프록시가 호출되었을 때 부가 기능인 어드바이스를 적용할지 말지 포인트컷을 보고 판단한다.
+
+- 앞서 설명한 예에서 `orderControllerV1`은 이미 프록시가 걸려있다.
+
+- `orderControllerV1의 request()`는 현재 포인트컷 조건에 만족하므로 프록시는 어드바이스를 먼저 호출하고, `target`을 호출한다.
+
+- `orderControllerV1의 noLog()`는 현재 포인트컷 조건에 만족하지 않으므로 어드바이스를 호출하지 않고 바로 `target`만 호출한다.
+
+- 프록시를 모든 곳에 생성하는 것은 비용 낭비이다.  **꼭 필요한 곳에 최소한의 프록시를 적용해야 한다.**  그래서 자동 프록시 생성기는 모든 스프링 빈에 프록시를 적용하는 것이 아니라  **포인트컷으로 한번 필터링해서 어드바이스가 사용될 가능성이 있는 곳에만 프록시를 생성한다.**
+
+### AOP(Aspect-Oriented Programming)
+
+- 핵심 로직(핵심 관심 사항)과 공통 관심 사항(로깅, 트랜잭션 관리 등)을 분리해서 유지보수를 용이하게 하는 기법
+- `proceed()` 호출 전에 실행하면 `Before` 역활
+- `proceed()` 호출 후 실행하면 `**After**` 역할
+- `proceed()`를 감싸면 `**Around**` 역할
+
+- AOP를 사용하기에 앞서 AOP 관련 클래스에는 `@Aspect` 어노테이션을 붙여여 함
+- `Bean`으로 등록을 해야 AOP가 정상적으로 스프링 컨테이너에 들어가게 되면서 작동
+- @Service, @Controller, @Component 등 자동으로 빈을 관리하는 부분도 포함
+- AspectJ 사용 시 빈이 아닌 객체에도 적용 가능
+- `@Around` 어노테이션을 이용해서 AOP가 적용 될 경로를 설정 해야 함
+-  `@Around`는 실행 전 후를 감싸는 용도이고, `@Before`, `@After`, `@AfterReturning`, `@AfterThrowing` 같은 여러 어노테이션이 존재
+- AOP가 적용되는 대상은 Bean으로 등록 된 클래스들로 한정
+- AOP는 공통 관심 사항으로 중간에 가짜 객체(프록시)를 중간자 역활로 둔 뒤 실제 핵심 로직과 연결하며 실행
+- AOP 내부에서 `proceed()`메서드가 호출이 될 때 실제 핵심 로직이 실행이 되는 구조
+
+### AspectJExpressionPointcut
+
+- 어드바이스에 포인트컷을 사용할 때 정밀하게 필터를 걸어두지 않으면 의도치 않은 객체까지 프록시로 생성되어 비용 낭비가 생길 수 있다.
+- 이러한 문제를 AspectJ라는 AOP에 특화된 포인트컷 표현식을 적용하여 해결할 수 있다.
+
+```java
+@Bean
+public Advisor advisor3(LogTrace logTrace) {
+// Pointcut
+AspectJExpressionPointcut pointcut = new AspectJExpressionPointcut();
+pointcut.setExpression("execution(* hello.proxy.app..*(..)) && !execution(* hello.proxy.app..noLog(..))");
+
+// Advice
+LogTraceAdvice advice = new LogTraceAdvice(logTrace);
+return new DefaultPointcutAdvisor(pointcut, advice);
+}
+```
+
+- `AspectJExpressionPointcut` : AspectJ 포인트컷 표현식을 적용할 수 있다.
+- `execution(* hello.proxy.app..*(..))` : AspectJ가 제공하는 포인트컷 표현식이다.
+- `*` : 모든 반환 타입
+- `hello.proxy.app..` : 해당 패키지와 그 하위 패키지
+- `*(..)` : `*` 모든 메서드 이름, `(..)` 파라미터는 상관 없음
+- `&&` : 두 조건을 모두 만족해야 함
+- `||` : OR 연산 가능
+- `!` : 반대
+
+### @Aspect AOP
+
+- 스프링은 `@Aspect` 어노테이션으로 매우 편리하게 포인트컷과 어드바이스로 구성되어 있는 어드바이저 생성 기능을 지원한다.
+
+```java
+@Slf4j
+@Aspect
+@RequiredArgsConstructor
+public class LogTraceAspect {
+
+private final LogTrace logTrace;
+
+@Around("execution(* hello.proxy.app..*(..))") // 포인트컷
+public Object execute(ProceedingJoinPoint joinPoint) throws Throwable { // 어드바이스
+TraceStatus status = null;
+try {
+String message = joinPoint.getSignature().toShortString();
+status = logTrace.begin(message);
+
+// 로직 호출
+Object result = joinPoint.proceed();
+
+logTrace.end(status);
+return result;
+} catch (Exception e) {
+logTrace.exception(status, e);
+throw e;
+}
+}
+}
+```
+
+- `@Aspect` : 어노테이션 기반 프록시를 적용할 때 필요 (포인트컷+어드바이스)
+- `@Around("execution(* hello.proxy.app..*(..))")`
+- `@Around`의 값에 포인트컷 표현식을 넣는다. 표현식은 AspectJ 표현식을 사용한다.
+- `@Around`의 메서드는 어드바이스(`Advice`)가 된다.
+- `ProceedingJoinPoint joinPoin` : 어드바이스의 `MethodInvocation ivocation`과 유사한 기능이다. 내부에 실제 호출 대상, 전달 인자, 그리고 어떤 객체와 어떤 메서드가 호출되었는지 정보가 포함되어 있다.
+- `joinPoint.proceed()` : 실제 호출 대상(`target`)을 호출한다.
+
+### @Aspect 프록시
+
+- 자동 프록시 생성기(`AnnotationAwareAspectJAutoProxyCreator)는` `Advisor`를 자동으로 찾아와서 필요한 곳에 프록시를 생성하고 적용해준다. 자동 프록시 생성기는 여기에 추가로 하나의 역할을 더 하는데, 바로 `@Aspect`를 찾아서 이것을 `Advisor`로 만들어준다.
+- 쉽게 이야기해서 기존의 포인트 컷을 만들고, 어드바이스를 만들어서 어드바이저를 만들고 어드바이저를 빈으로 등록하는 일련의 과정이 `@Aspect`를 사용하면 `Advisor`로 변환해서 저장하는 기능을 자동으로 지원한다.
+
+![[@Aspect 어드바이저로 변환 과정.png]]
+
+### @Aspect 어드바이저 빌더
+
+- `BeanFactoryAspectJAdvisorBuilder`클래스는 `@Aspect`의 정보를 기반으로 포인트컷, 어드바이스, 어드바이저를 생성하고 보관하는 것을 담당한다.
+- `@Aspect`의 정보를 기반으로 어드바이저를 만들고, `@Aspect`어드바이저 빌더 내부 저장소에 캐시한다. 캐시에 어드바이저가 이미 만들어져 있는 경우 캐시에 저장된 어드바이저를 반환한다.
+
+![[어드바이저 빌더 기반 프록시 생성.png]]
+
+- 애플리케이션 전반에 로그를 남기는 기능은 특정 기능 하나에 관심이 있는 기능이 아닌 애플리케이션의 여러 기능들 사이에 걸쳐서 들어가는 공통 관심사이다.
+- 이것을 `횡단 관심사(cross-cutting concerns)`라고 한다.
+
+![[횡단 관심사.png]]
+
+
+### AOP
+
+#### 핵심 기능과 부가 기능
+
+- 애플리케이션 로직은 크게 `핵심 기능` 과 `부가 기능`으로 나눌 수 있다.
+- `핵심 기능`은 해당 객체가 제공하는 고유의 기능이다. 예를 들어서 `OrderService`의 핵심 기능은 주문 로직이다.
+- `부가 기능`은 핵심 기능을 보조하기 위해 제공되는 기능이다. 예를 들어서 로그 추적 로직, 트랜잭션 기능 등이 있다. 이러한 부가 기능은 단독으로 사용되지 않고, 핵심 기능과 함께 사용된다. 예를 들어서 로그 추적 기능은 어떤 핵심 기능이 호출되었는지 로그를 남기기 위해 사용한다. 그러니까 부가 기능은 이름 그대로 핵심 기능을 보조하기 위해 존재한다.
+- 소프트웨어 개발에서 변경 지점은 하나가 될 수 있도록 잘 모듈화 되어야 한다. 그런데 부가 기능처럼 특정 로직을 애플리케이션 전반에 적용하는 문제는 일반적인 OOP 방식으로 해결이 어렵다.
+- 예를 들어 프레젠테이션 계층, 비즈니스 계층, 퍼시스트 계층에 부가 기능을 추가하려고 할 때 모든 계층의 로직에 공통 관심사인 부가 기능까지 전부 다 추가를 해야한다. 이 부분을 유틸리티로 분리하여도 결국 그 유틸리티가 적용되는 부분을 로직에 추가해줘야 하는 건 변함이 없다.
+- 이러한 부분을 `스프링 AOP` 를 이용하여 해결할 수 있다.
+
+#### 애스펙트
+
+- 애스펙트는 우리말로 해석하면 `관점`이라는 뜻인데, 이름 그대로 애플리케이션을 바라보는 관점을 하나하나의 기능에서 `횡단 관심사(cross-cutting concerns)` 관점으로 달리 보는 것이다.
+- 이렇게 애스팩트를 사용한 프로그래밍 방식을 `관점 지향 프로그래밍 AOP(Aspect-Oriented Programming)`이라 한다.
+- 참고로 AOP는 OOP를 대체하기 위한 것이 아니라 횡단 관심사를 깔끔하게 처리하기 어려운 OOP의 부족한 부분을 보조하고자 하는 목적으로 개발되었다.
+
+![[AOP 횡단 관심사.png]]
+
+- AspectJ 프레임워크
+- AOP의 대표적인 구현으로 AspectJ 프레임워크가 있다. 스프링도 AOP를 지원하지만, 대부분 AspectJ의 문법을 차용하고, AspectJ가 제공하는 기능의 일부만 제공한다.
+- AspectJ 프레임워크는 스스로를 다음과 같이 설명한다.
+- 자바 프로그래밍 언어에 대한 완벽한 관점 지향 확장
+- 횡단 관심사의 깔끔한 모듈화
+- 오류 검사 및 처리
+- 동기화
+- 성능 최적화 (캐싱)
+- 모니터링 및 로깅
+
+### AOP 적용 방식
+
+- AOP를 사용하면 핵심 기능과 부가 기능이 코드상 완전히 분리되어서 관리된다.
+- AOP를 사용할 때 부가 기능 로직을 핵심 로직에 추가하는 방법은 크게 3가지로 분류된다.
+1. 컴파일 시점
+2. 클래스 로딩 시점
+3. 런타임 시점 (프록시)
+
+![[AOP 적용 - 컴파일 시점.png]]
+
+- `.java` 소스 코드를 컴파일러를 사용해서 `.class`를 만드는 시점에 부가 기능 로직을 추가할 수 있다. 이때는 AspectJ가 제공하는 특별한 컴파일러를 사용해야 한다. 컴파일 된 `.class`를 디컴파일 해보면 애스팩트 관련 호출 코드가 들어간다. 이해하기 쉽게 풀어서 이야기하면 부가 기능 코드가 핵심 기능이 있는 컴파일 된 코드 주변에 실제로 붙어 버린다고 생각하면 된다. AspectJ 컴파일러는 Aspect를 확인해서 해당 클래스가 적용 대상인지 먼저 확인하고, 적용 대상인 경우에 부가 기능 로직을 적용한다.
+- 참고로 이렇게 원본 로직에 부가 기능 로직이 추가되는 것을 `위빙(Weaving)` 이라 한다.
+- `위빙(Weaving)` : 옷감을 짜다, 직조하다. 애스팩트롸 실제 코드를 연결해서 붙이는 것
+- 다만 이러한 컴파일 시점의 단점은 컴파일 시점에 부가 기능을 적용하려면 특별한 컴파일러도 필요하고 복잡해서 잘 사용하지 않는다.
+
+![[AOP 적용 - 클래스 로딩 시점.png]]
+
+- 자바를 실행하면 자바 언어는 `.class`파일을 JVM 내부의 클래스 로더에 보관한다. 이때 중간에서 `.class`파일을 조작한 다음 JVM에 올릴 수 있다. 자바 언어는 `.class`를 JVM에 저장하기 전에 조작하수 있는 기능을 제공한다. (`Instrumentation`), 참고로 수 많은 모니터링 툴들이 이 방식을 사용한다. 이 시점에 애스팩트를 적용하는 것을 `로드 타임 위빙` 이라 한다.
+- 이 로드 타임 위빙의 단점은 자바를 실행할 때 특별한 옵션(`java -javaagent`)를 통해 클래스 로더 조작기를 지정해야 하는데, 이 부분이 번거롭고 운영하기 어렵워서 이 역시 잘 사용하지 않는다.
+
+![[AOP 적용 - 런타임 시점.png]]
+
+- 런타임 시점은 컴파일도 다 끝나고, 클래스 로더에 클래스도 다 올라가서 이미 자바가 실행되고 난 다음을 말한다. 자바의 메인 메서드가 이미 실행된 다음이다. 따라서 자바 언어가 제공하는 범위 안에서 부가 기능을 적용해야 한다. 스프링과 같은 컨테이너의 도움을 받고 프록시와 DI, 빈 포스트 프로세서 같은 개념들을 총 동원해야 한다. 이렇게하면 최종적으로 프록시를 통해 스프링 빈에 부가 기능을 적용할 수 있다. 이 방식 현재의 프록시 방식 즉, AOP 이다.
+- 프록시를 사용하기 때문에 AOP 기능에 일부 제약이 있다. 하지만, 특별한 컴파일러나 자바를 실행할 때 복잡한 옵션과 클래스 로더 조작기를 설정하지 않아도 된다. 스프링만 있으면 얼마든지 AOP를 적용할 수 있다.
+
+### AOP 적용 위치
+
+- AOP를 적용할 수 있는 지점을 적용 가능 지점(조인 포인트, Join Point) 라고 하는데, AspectJ를 사용해서 컴파일 시점과 클래스 로딩 시점에 적용하는 AOP는 바이트코드를 실제로 조작하기 때문에 해당 기능을 모든 지점에 다 적용할 수 있다.
+- 그러나, 프록시 방식을 사용하는 스프링 AOP는 메서드 실행 지점에만 AOP를 적용 할 수 있다.
+- 프록시는 메서드 오버라이딩 개념으로 동작하기 때문에 생성자나 정적 메서드, 필드 값 접근에는 프록시 개념이 적용 될 수 없다.
+- 프록시를 사용하는 **스프링 AOP의 조인 포인트는 메서드 실행으로 제한**된다.
+- 즉, 프록시 방식을 사용하는 스프링 AOP는 스프링 컨테이너가 관리할 수 있는 **스프링 빈에만 AOP를 적용**할 수 있다.
+
+- 컴파일 시점과 클래스 로딩 시점에 적용하는 방식에 비해 런타임 방식의 AOP는 조인 포인트의 문제도 그렇고 제한적인 문제들도 있어서 다른 두 가지 방식에 비해 부족해보이지만, 이 런타임 시점 AOP 방식의 장점은 별도의 추가 자바 설정없이 스프링만 있으면 편리하게 AOP를 사용할 수 있다는 점이다. 자동 프록시 생성같은 기능도 이미 스프링 빈에 등록되어 있고 중요한 부분은 스프링이 제공하는 AOP 기능만으로도 실무의 대부분의 문제를 해결할 수 있다는 점이다.
+
+### AOP 용어 정리
+
+- `조인 포인트 (Join point)`
+- 어드바이스가 적용될 수 있는 위치, 메서드 실행, 생성자 호출, 필드 값 접근, 정적 메서드 접근 등 프로그램 실행 중 지점
+- 조인 포인트는 추상적인 개념이다. AOP를 적용할 수 있는 모든 지점이라 생각하면 된다.
+- **스프링 AOP는 프록시 방식을 사용하므로 조인 포인트는 항상 메서드 실행 지점으로 제한된다.**
+
+- `포인트컷(Pointcut)`
+- 조인 포인트 중에서 어드바이스가 적용될 위치를 선별하는 기능
+- 주로 AspectJ 표현식을 사용해서 지정
+- 프록시를 사용하는 스프링 AOP는 메서드 실행 지점만 포인트컷으로 선별 가능
+
+- `타겟(Target)`
+- 어드바이스를 받는 객체, 포인트컷으로 결정
+- 쉽게 말해서 부가 기능을 적용 할 핵심 기능이 포함되어 있는 객체
+
+- `어드바이스(Advice)`
+- 부가 기능
+- 특정 조인 포인트에서 Aspect에 의해 취해지는 조치
+- Around(주변), Before(전), After(후)와 같은 다양한 종류의 어드바이스가 있음
+
+- `에스펙트(Aspect)`
+- 어드바이스 + 포인트컷을 모듈화 한 것
+- `@Aspect`를 생각하면 된다.
+- 여러 어드바이스와 포인트컷이 함께 존재
+
+- `어드바이저(Advisor)`
+- 하나의 어드바이스와 하나의 포인트컷으로 구성
+- 스프링 AOP에서만 사용되는 특별한 용어
+
+- `위빙(Weaving)`
+- 포인트컷으로 결정한 타겟의 조인 포인트에 어드바이스를 적용하는 것
+- 조인 포인트에 어드바이스를 실제로 적용하는 행위
+- 위빙을 통해 핵심 기능 코드에 영향을 주지 않고 부가 기능을 추가할 수 있음
+- AOP 적용을 위해 애스팩트를 객체에 연결한 상태
+- 컴파일 타임(AspectJ compiler)
+- 로드 타임
+- 런타임, 스프링 AOP는 런타임, 프록시 방식
+
+- AOP 프록시
+- AOP 기능을 구현하기 위해 만든 프록시 객체, 스프링에서 AOP 프록시는 JDK 동적 프록시 또는 CGLIB 프록시 이다.
+
+### @Pointcut
+
+```java
+// hello.aop.order 패키지와 하위 패키지
+@Pointcut("execution(* hello.aop.order..*(..))")
+private void allOrder(){} // pointcut signature
+
+// 클래스 이름 패턴이 *Service
+@Pointcut("execution(* *..*Service.*(..))")
+private void allService(){}
+
+@Around("allOrder()")
+public Object doLog(ProceedingJoinPoint joinPoint) throws Throwable {
+log.info("[log] {}", joinPoint.getSignature()); // join point 시그니처
+return joinPoint.proceed();
+}
+
+// hello.aop.order 패키지와 하위 패키지 이면서 클래스 이름 패턴이 *Service
+@Around("allOrder() && allService()")
+public Object doTransaction(ProceedingJoinPoint joinPoint) throws Throwable {
+
+try {
+log.info("[트랜잭션 시작] {}", joinPoint.getSignature());
+
+Object result = joinPoint.proceed();
+
+log.info("[트랜잭션 커밋] {}", joinPoint.getSignature());
+return result;
+} catch (Exception e) {
+log.info("[트랜잭션 롤백] {}", joinPoint.getSignature());
+throw e;
+} finally {
+log.info("[리소스 릴리즈] {}", joinPoint.getSignature());
+}
+}
+```
+
+- `@Pointcut`에 Aspect 표현식을 사용한다.
+- 메서드 이름과 파라미터를 합쳐서 포인트컷 시그니처 라고 한다.
+- 메서드의 반환 타입은 `void`여야 한다.
+- 코드 내용은 비워둔다.
+- 위 코드의 포인트컷 시그니처는 `allOrder()`이다. 이름 그대로 주문과 관련된 모든 기능을 대상으로 하는 포인트컷이다.
+- `@Around`어드바이스에서는 포인트컷을 직접 지정해도 되지만, 포인트컷 시그니처를 사용해도 된다.
+- 여기선 `@Around("allOrder()")`를 사용한다.
+- `private`,`public`같은 접근 제어자는 내부에서만 사용하면 `private`을 사용해도 되지만, 다른 애스팩트에서 참고하려면 `public`을 사용해야 한다.
+- 결과적으로 이렇게 분리하면 하나의 포인트컷 표현식을 여러 어드바이스에서 함께 사용할 수 있다.
+- 다른 클래스에 있는 외부 어드바이스에서도 포인트컷을 함께 사용할수 있다.
+- 포인트컷을 외부 클래스에 모아두고 유틸 클래스처럼 사용할 수 있다.
+- 단, 접근 제어자는 `public`으로 둬야한다.
+```java
+public class Pointcuts {
+
+// hello.aop.order 패키지와 하위 패키지
+@Pointcut("execution(* hello.aop.order..*(..))")
+public void allOrder() {} // pointcut signature
+
+// 클래스 이름 패턴이 *Service    @Pointcut("execution(* *..*Service.*(..))")
+public void allService() {}
+
+// allOrder && allService
+@Pointcut("allOrder() && allService()")
+public void orderAndService(){}
+}
+
+...
+
+@Around("hello.aop.order.aop.Pointcuts.allOrder()")
+public Object doLog(ProceedingJoinPoint joinPoint) throws Throwable {
+log.info("[log] {}", joinPoint.getSignature()); // join point 시그니처
+return joinPoint.proceed();
+}
+
+// hello.aop.order 패키지와 하위 패키지 이면서 클래스 이름 패턴이 *Service
+@Around("hello.aop.order.aop.Pointcuts.orderAndService()")
+public Object doTransaction(ProceedingJoinPoint joinPoint) throws Throwable {
+
+try {
+log.info("[트랜잭션 시작] {}", joinPoint.getSignature());
+
+Object result = joinPoint.proceed();
+
+log.info("[트랜잭션 커밋] {}", joinPoint.getSignature());
+return result;
+} catch (Exception e) {
+log.info("[트랜잭션 롤백] {}", joinPoint.getSignature());
+throw e;
+} finally {
+log.info("[리소스 릴리즈] {}", joinPoint.getSignature());
+}
+}
+```
+
+### 어드바이스 순서
+
+- 어드바이스는 기본적으로 순서를 보장하지 않는다. 순서를 지정하고 싶으면 `@Aspect`적용 단위로 애노테이션을 적용해야한다.
+- 문제는 이것을 어드바이스 단위가 아니라 클래스 단위로 적용할 수 있다는 점이다. (`@Order`)
+- 따라서 애스팩트를 별도의 클래스로 분리해야 한다.
+
+### 어드바이스 종류
+
+- `@Around` : 메서드 호출 전 후에 수행, 가장 강력한 어드바이스, 조인 포인트 실행 여부 선택, 반환 값 변환, 예외 변환 등이 가능 (사실상 이 하나로 다 할 수 있음)
+- `@Before` : 조인 포인트 실행 이전에 실행
+- `@AfterReturning` : 조인 포인트가 정상 완료 후 실행
+- `@AfterThrowing` : 메서드가 예외를 던지는 경우 실행
+- `@After` : 조인포인트가 정상 또는 예외에 관계없이 실행 (`finally`)
+
+```java
+@Before("hello.aop.order.aop.Pointcuts.orderAndService()")
+public void doBefore(JoinPoint joinPoint) {
+log.info("[Before] {}", joinPoint.getSignature());
+}
+
+@AfterReturning(value = "hello.aop.order.aop.Pointcuts.orderAndService()", returning = "result")
+public void doReturn(JoinPoint joinPoint, Object result) {
+log.info("[Return] {}, return={}", joinPoint.getSignature(), result);
+}
+
+@AfterThrowing(value = "hello.aop.order.aop.Pointcuts.orderAndService()", throwing = "ex")
+public void doThrowing(JoinPoint joinPoint, Exception ex) {
+log.info("[Ex] {}, message={}", joinPoint.getSignature(), ex);
+}
+
+@After(value = "hello.aop.order.aop.Pointcuts.orderAndService()")
+public void doAfter(JoinPoint joinPoint) {
+log.info("[After] {}", joinPoint.getSignature());
+}
+```
+
+- `@Around`는 `ProceedingJoinPoint`를 사용해야 하지만, 다른 어드바이스들은 `JoinPoint`를 첫 번째 파라미터에 사용할 수 있다. (생략 가능)
+- `@Around`는 가장 강력한 어드바이스로 메서드의 실행 주변에서 실행된다.
+- 즉, 메서드 실행 전 후에 작업을 수행한다.
+- 어드바이스의 첫 번째 파라미터는 `ProceedingJoinPoint`를 사용하며, `proceed()`를 통해 대상을 실행하고, `proceed()`를 여러 번 실행할 수 있다. (재시도)
+- 동일한 `@Aspect`안에서 동일한 조인포인트의 어드바이스 우선순위는 `@Around` -> `@Before` -> `@After` -> `@AfterReturning` -> `@AfterThrowing`이며, 호출 순서와 리턴 순서는 반대라는 점만 알아두면 된다.
+
+![[어드바이스 호출 순서.png]]
+
+- `@Before`는 `joinPoint.proceed()`를 호출하는 고민을 하지 않아도 된다.
+###  어드바이스 비교: `@Around` vs `@Before`, `@After`
+
+- `@Around`가 가장 넓은 기능을 제공하는 것은 맞지만, **실수할 가능성**이 있다.
+
+- 반면에 `@Before`, `@After` 같은 어드바이스는:
+- 기능은 적지만 **실수할 가능성이 낮고**
+- 코드도 **단순**하다.
+
+- 가장 중요한 차이:
+- **코드를 작성한 의도**가 명확하게 드러난다.
+- 예: `@Before`라는 애노테이션을 보는 순간,
+→ _"아, 이 코드는 타겟 실행 전에 한정해서 어떤 일을 하는 코드구나"_ 라는 의도가 드러남.
+
+- 좋은 설계는 **제약이 있는 것**이다.
+- "`@Around`만 있으면 되는데 왜 제약을 두는가?"
+- → 실수를 **미연에 방지**한다.
+- → **일종의 가이드 역할**
+- 예시:
+- `@Around`를 썼을 때:
+- 중간에 다른 개발자가 해당 코드를 수정해서 `proceed()` 호출을 빠뜨릴 수 있다면?
+- → **장애**가 발생할 수 있음.
+- 처음부터 `@Before`를 사용했다면?
+- → **이런 문제 자체가 발생하지 않는다.**
+- 결론:
+- 제약 덕분에 **의도가 명확**
+- 다른 개발자도 코드를 보고 고민해야 하는 **범위가 줄어들고**, 코드의 의도도 **쉽게 파악 가능**
+#### JoinPoint 인터페이스의 주요 기능
+
+- `getArgs()` : 메서드 인수를 반환
+- `getThis()` : 프록시 객체를 반환
+- `getTarget()` : 대상 객체를 반환
+- `getSignature()` : 조언되는 메서드에 대한 설명을 반환
+- `toString()` : 조언되는 방법에 대한 유용한 설명을 인쇄
+
+#### ProceedingJoinPoint 인터페이스
+
+- `ProceedingJoinPoint`는 `JoinPoint`의 하위 타입이다.
+- `proceed()` : 다음 어드바이스나 타겟을 호출
+
+## 포인트컷 지시자
+
+포인트컷 표현식은 `execution` 같은 포인트컷 지시자(Pointcut Designator)로 시작한다. 줄여서 PCD라 한다.
+### 포인트컷 지시자의 종류
+
+- `execution`: 메소드 실행 조인 포인트를 매칭한다. **스프링 AOP에서 가장 많이 사용**하고, 기능도 복잡하다.
+- `within`: 특정 타입 내의 조인 포인트를 매칭한다.
+- `args`: 인자가 주어진 타입의 인스턴스인 조인 포인트
+- `this`: 스프링 빈 객체(스프링 AOP 프록시)를 대상으로 하는 조인 포인트
+- `target`: Target 객체(스프링 AOP 프록시가 가리키는 실제 대상)를 대상으로 하는 조인 포인트
+- `@target`: 실행 객체의 클래스에 주어진 타입의 애노테이션이 있는 조인 포인트
+- `@within`: 주어진 애노테이션이 있는 타입 내 조인 포인트
+- `@annotation`: 메서드가 주어진 애노테이션을 가지고 있는 조인 포인트를 매칭
+- `@args`: 전달된 실제 인수의 런타임 타입이 주어진 타입의 애노테이션을 갖는 조인 포인트
+- `bean`: 스프링 전용 포인트컷 지시자, 빈의 이름으로 포인트컷을 지정한다.
+
+- `execution`을 가장 많이 사용하고, 나머지는 자주 사용하지 않는다. 따라서 `execution`을 중점적으로 이해하자.
+
+### execution 문법
+
+```java
+execution(접근제어자? 반환타입 선언타입?메서드이름(파라미터) 예외?)
+```
+- 메서드 실행 조인 포인트를 매칭한다.
+- `?`는 생략할 수 있다.
+- `*`같은 패턴을 지정할 수 있다.
+
+```java
+
+AspectJExpressionPointcut pointcut = new AspectJExpressionPointcut();
+Method helloMethod;
+
+@BeforeEach
+public void init() throws NoSuchMethodException {
+helloMethod = MemberServiceImpl.class.getMethod("hello", String.class);
+}
+
+...
+
+@Test
+void exactMatch() {
+pointcut.setExpression("execution(public String hello.aop.member.MemberServiceImpl.hello(String))");
+assertThat(pointcut.matches(helloMethod, MemberServiceImpl.class)).isTrue();
+}
+```
+
+- 매칭 조건
+- 접근제어자? : `public`
+- 반환타입 : `String`
+- 선언타입? : `hello.aop.member.MemberServiceImpl`
+- 메서드이름 : `hello`
+- 파라미터 : `(String)`
+- 예외? : 생략
+
+```java
+@Test
+void exactMatch() {
+pointcut.setExpression("execution(public String hello.aop.member.MemberServiceImpl.hello(String))");
+assertThat(pointcut.matches(helloMethod, MemberServiceImpl.class)).isTrue();
+}
+
+@Test
+void allMatch() {
+pointcut.setExpression("execution(* *(..))");
+assertThat(pointcut.matches(helloMethod, MemberServiceImpl.class)).isTrue();
+}
+
+@Test
+void nameMatch() {
+pointcut.setExpression("execution(* hello(..))");
+assertThat(pointcut.matches(helloMethod, MemberServiceImpl.class)).isTrue();
+}
+
+@Test
+void nameMatchStar1() {
+pointcut.setExpression("execution(* hel*(..))");
+assertThat(pointcut.matches(helloMethod, MemberServiceImpl.class)).isTrue();
+}
+
+@Test
+void nameMatchStar2() {
+pointcut.setExpression("execution(* *el*(..))");
+assertThat(pointcut.matches(helloMethod, MemberServiceImpl.class)).isTrue();
+}
+
+@Test
+void nameMatchFalse() {
+pointcut.setExpression("execution(* nono(..))");
+assertThat(pointcut.matches(helloMethod, MemberServiceImpl.class)).isFalse();
+}
+
+@Test
+void packageExactMatch1() {
+pointcut.setExpression("execution(* hello.aop.member.MemberServiceImpl.hello(..))");
+assertThat(pointcut.matches(helloMethod, MemberServiceImpl.class)).isTrue();
+}
+
+@Test
+void packageExactMatch2() {
+pointcut.setExpression("execution(* hello.aop.member.*.*(..))");
+assertThat(pointcut.matches(helloMethod, MemberServiceImpl.class)).isTrue();
+}
+
+@Test
+void packageExactFalse() {
+pointcut.setExpression("execution(* hello.aop.*.*(..))"); // 패키지 경로를 완벽히 명시 안 하면 실패
+assertThat(pointcut.matches(helloMethod, MemberServiceImpl.class)).isFalse();
+}
+
+@Test
+void packageMatchSubPackage1() {
+pointcut.setExpression("execution(* hello.aop.member..*.*(..))");
+assertThat(pointcut.matches(helloMethod, MemberServiceImpl.class)).isTrue();
+}
+
+@Test
+void packageMatchSubPackage2() {
+pointcut.setExpression("execution(* hello.aop..*.*(..))");
+assertThat(pointcut.matches(helloMethod, MemberServiceImpl.class)).isTrue();
+}
+```
+
+- 위 와 같이 매칭 조건을 생략할 수 있고, 생략 대상은 `*` 패턴으로 지정한다.
+- `.`,`..`의 차이를 이해해야 한다.
+- `.` : 정확하게 해당 위치의 패키지
+- `..` : 해당 위치의 패키지와 그 하위 패키지도 포함
+
+- 타입 매칭 - 부모 타입이어도 매칭이 허용된다. (`MemberService = 인터페이스`)
+```java
+@Test
+void typeMatchSuperType() {
+pointcut.setExpression("execution(* hello.aop.member.MemberService.*(..))");
+assertThat(pointcut.matches(helloMethod, MemberServiceImpl.class)).isTrue();
+}
+```
+
+- 단, 타입 매칭의 경우 부모에서 선언한 메서드만 허용
+```java
+public interface MemberService {
+String hello(String param);
+}
+
+...
+
+public class MemberServiceImpl implements MemberService {
+
+@Override
+@MethodAop("test value")
+public String hello(String param) {
+return "ok";
+}
+
+public String internal(String param) {
+return "ok";
+}
+}
+
+...
+
+@Test
+void typeMatchInternal() throws NoSuchMethodException {
+pointcut.setExpression("execution(* hello.aop.member.MemberService.*(..))");
+Method internalMethod = MemberServiceImpl.class.getMethod("internal", String.class);
+assertThat(pointcut.matches(internalMethod, MemberServiceImpl.class)).isFalse();
+}
+```
+
+### execution 파라미터 매칭 규칙
+- `(String)` : 정확하게 `String` 타입 파라미터
+- `()` : 파라미터가 없어야 한다.
+- `(*)` : 정확히 하나의 파라미터, 단 **모든 타입**을 허용한다.
+- `(*, *)` : 정확히 두 개의 파라미터, 단 **모든 타입**을 허용한다.
+- `(..)` : **숫자와 무관하게 모든 파라미터**, 모든 타입을 허용한다. 참고로 파라미터가 없어도 된다. `0..*`로 이해하면 된다.
+- `(String, ..)` : `String` 타입으로 시작해야 한다. 숫자와 무관하게 모든 파라미터, 모든 타입을 허용한다.
+- 예) `(String)`, `(String, Xxx)`, `(String, Xxx, Xxx)` 허용
+```java
+// String 타입의 파라미터 허용
+// (String)
+@Test
+void argsMatch() {
+pointcut.setExpression("execution(* *(String))");
+assertThat(pointcut.matches(helloMethod, MemberServiceImpl.class)).isTrue();
+}
+
+// 파라미터가 없어야 함
+// ()
+@Test
+void argsMatchNoArgs() {
+pointcut.setExpression("execution(* *())");
+assertThat(pointcut.matches(helloMethod, MemberServiceImpl.class)).isFalse();
+}
+
+// 정확히 하나의 파라미터 허용, 모든 타입 허용
+// (Xx)
+@Test
+void argsMatchStart() {
+pointcut.setExpression("execution(* *(*))");
+assertThat(pointcut.matches(helloMethod, MemberServiceImpl.class)).isTrue();
+}
+
+// 숫자와 무관하게 모든 파라미터, 모든 타입 허용
+// (), (Xxx), (Xxx, Xxx)
+@Test
+void argsMatchAll() {
+pointcut.setExpression("execution(* *(..))");
+assertThat(pointcut.matches(helloMethod, MemberServiceImpl.class)).isTrue();
+}
+
+// String 타입으로 시작, 숫자와 무관하게 모든 파라미터, 모든 타입 허용
+// (String), (String, Xxx), (String, Xxx, Xxx)
+@Test
+void argsMatchComplex() {
+pointcut.setExpression("execution(* *(String, ..))");
+assertThat(pointcut.matches(helloMethod, MemberServiceImpl.class)).isTrue();
+}
+```
