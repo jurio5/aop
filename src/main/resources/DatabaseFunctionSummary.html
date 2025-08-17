@@ -1,0 +1,405 @@
+
+# SQL - 데이터 가공
+
+##  산술 연산
+
+- **필요성**: 단순 조회를 넘어, 가격 × 수량 같은 계산이 필요할 때.
+
+- `SELECT` 절 안에서 사칙연산(`+`, `-`, `*`, `/`) 가능.
+
+- **별칭(Alias)**: `AS` 키워드로 의미 있는 이름 부여.
+
+```sql
+SELECT name, price, stock_quantity, price * stock_quantity AS total_stock_value FROM products;
+```
+
+### 다양한 예시
+
+- 덧셈: `price + 3000`
+
+- 뺄셈: `price - 1000`
+
+- 곱셈: `price * stock_quantity`
+
+- 나눗셈: `price / 10` or `price * 0.1`
+
+---
+##  문자열 함수
+
+- **필요성**: 이름 + 이메일, 주소 합치기 등.
+
+- **해결책**: `CONCAT()` 사용.
+
+```sql
+SELECT CONCAT(name, ' (', email, ')') AS name_and_email FROM customers;
+```
+
+### 기본 문자열 함수
+
+- `CONCAT_WS(separator, str1, str2, ...)` → 구분자와 함께 연결
+- ex ) `select concat_ws(' - ', name, email, address) from customers`
+- 결과 : `이순신 - sunsin@example.com - 서울광역시 xx`
+
+- `UPPER(str)` / `LOWER(str)` → 대문자/소문자 변환
+
+- `CHAR_LENGTH(str)` → 글자 수
+
+- `LENGTH(str)` → 바이트 수
+- 한글은 3바이트로 측정
+
+
+---
+
+## NULL 함수
+
+- **문제**: `NULL` 그대로 노출되면 사용자 경험 저하.
+
+- **해결책**: `IFNULL`, `COALESCE` 함수 활용.
+
+```sql
+SELECT name, IFNULL(description, '상품 설명 없음') AS description FROM products;
+```
+
+- `IFNULL(expr1, expr2)` → expr1 이 `NULL`이면 expr2 반환.
+
+- `COALESCE(expr1, expr2, expr3, ...)`
+
+- **왼쪽에서 오른쪽으로 차례대로 확인하면서, 처음으로 `NULL`이 아닌 값을 반환**.
+- 모든 값이 `NULL`이면 최종적으로 `NULL` 반환.
+- `IFNULL`은 인자 2개만 받지만, `COALESCE`는 여러 개를 받을 수 있음.
+- 즉, 여러 후보값 중에서 **우선순위를 두고 값 선택**이 가능.
+
+- `단순 대체`
+```sql
+SELECT name, COALESCE(description, '상품 설명 없음') AS description FROM products;
+```
+→ `description`이 `NULL`이면 `'상품 설명 없음'` 출력.
+(결과는 `IFNULL`과 동일)
+
+- `여러 후보 중에서 선택`
+```sql
+`SELECT name, COALESCE(short_description, long_description, '설명 없음') AS final_description FROM products;`
+```
+short_description 있으면 그 값을 사용
+없으면 `long_description` 사용
+둘 다 없으면 `'설명 없음'` 출력
+
+---
+
+## 다양한 함수
+
+### SQL 표준 함수
+
+#### 문자열
+
+- `UPPER(str)` → 문자열을 대문자로 변환
+```sql
+SELECT UPPER('hello');  -- 결과: HELLO`
+```
+
+- `LOWER(str)` → 문자열을 소문자로 변환
+```sql
+SELECT LOWER('HELLO');  -- 결과: hello`
+```
+
+- `SUBSTRING(str, start, length)` → 문자열의 일부 추출
+```sql
+SELECT SUBSTRING('Database', 1, 4);  -- 결과: Data`
+```
+
+- `TRIM(str)` → 문자열 앞뒤 공백 제거
+```sql
+SELECT TRIM('   hello   ');  -- 결과: hello`
+```
+
+- `POSITION(substr IN str)` → 부분 문자열의 위치 반환 (1부터 시작)
+```sql
+SELECT POSITION('base' IN 'Database');  -- 결과: 5`
+```
+
+- `CHAR_LENGTH(str)` → 문자열의 글자 수
+```sql
+SELECT CHAR_LENGTH('안녕');  -- 결과: 2`
+```
+
+---
+#### 숫자
+
+- `ABS(num)` → 절댓값
+```sql
+SELECT ABS(-10);  -- 결과: 10`
+```
+
+- `MOD(dividend, divisor)` → 나머지
+```sql
+SELECT MOD(10, 3);  -- 결과: 1`
+```
+
+- `ROUND(num, decimals)` → 반올림
+```sql
+SELECT ROUND(3.14159, 2);  -- 결과: 3.14`
+```
+
+- `CEILING(num)` → 올림
+```sql
+SELECT CEILING(3.14);  -- 결과: 4`
+```
+
+- `FLOOR(num)` → 내림
+```sql
+SELECT FLOOR(3.99);  -- 결과: 3`
+```
+
+- `SQRT(num)` → 제곱근
+```sql
+SELECT SQRT(16);  -- 결과: 4`
+```
+
+- `POWER(base, exponent)` → 거듭제곱
+```sql
+SELECT POWER(2, 3);  -- 결과: 8`
+```
+
+---
+
+#### 날짜/시간
+
+- `CURRENT_DATE` → 현재 날짜
+```sql
+SELECT CURRENT_DATE;  -- 결과: 2025-08-17`
+```
+
+- `CURRENT_TIME` → 현재 시간
+```sql
+`SELECT CURRENT_TIME;  -- 결과: 01:35:12`
+```
+
+- `CURRENT_TIMESTAMP` → 현재 날짜와 시간
+```sql
+SELECT CURRENT_TIMESTAMP;  -- 결과: 2025-08-17 01:35:12`
+```
+
+- `EXTRACT(field FROM date)` → 특정 부분 추출
+```sql
+SELECT EXTRACT(YEAR FROM '2025-08-17');  -- 결과: 2025`
+```
+
+---
+#### 조건/변환
+
+- `CAST(expr AS type)` → 데이터 타입 변환
+```sql
+SELECT CAST('123' AS SIGNED);  -- 결과: 123 (정수)`
+```
+
+- `COALESCE(expr1, expr2, ...)` → 첫 번째 NULL이 아닌 값 반환
+```sql
+SELECT COALESCE(NULL, NULL, '대체값');  -- 결과: 대체값`
+```
+
+- `NULLIF(expr1, expr2)` → 두 값이 같으면 NULL, 다르면 expr1 반환
+```sql
+SELECT NULLIF(5, 5);  -- 결과: NULL
+SELECT NULLIF(5, 10); -- 결과: 5`
+```
+
+---
+#### 집계
+
+- `AVG(expr)` → 평균값
+```sql
+SELECT AVG(price) FROM products;
+```
+
+- `COUNT(expr)` → NULL 제외 개수
+```sql
+SELECT COUNT(email) FROM customers;
+```
+
+- `COUNT(*)` → 전체 행 개수
+```sql
+SELECT COUNT(*) FROM customers;
+```
+
+- `MAX(expr)` → 최댓값
+```sql
+SELECT MAX(price) FROM products;
+```
+
+- `MIN(expr)` → 최솟값
+```sql
+SELECT MIN(price) FROM products;
+```
+
+- `SUM(expr)` → 합계
+```sql
+SELECT SUM(price) FROM products;
+```
+
+---
+### 데이터베이스 방언
+
+- 특정 DBMS 전용 기능 (호환성 낮음)
+
+- 예: **MySQL의 `IFNULL`**
+
+```sql
+SELECT IFNULL(description, '없음') FROM products;
+```
+
+---
+### MySQL 전용 함수
+
+#### 1. 문자열
+
+- `CONCAT(str1, str2)` -> 문자열 연결
+```sql
+SELECT CONCAT('서울', ' - ', '종로구') -- 결과: 서울-종로구
+```
+
+- `CONCAT_WS('-', str1, str2)` → 구분자와 함께 문자열 연결
+```sql
+SELECT CONCAT_WS('-', '서울', '종로구');  -- 결과: 서울-종로구
+```
+
+- `GROUP_CONCAT(expr)` → 그룹화된 문자열 합치기
+```sql
+SELECT GROUP_CONCAT(name) FROM products;
+```
+
+- `LPAD(str, len, pad)` → 왼쪽 채우기
+```sql
+`SELECT LPAD('7', 3, '0');  -- 결과: 007`
+```
+
+- `RPAD(str, len, pad)` → 오른쪽 채우기
+```sql
+SELECT RPAD('7', 3, '0');  -- 결과: 700
+```
+
+- `REPLACE(str, from, to)` → 문자열 치환
+```sql
+SELECT REPLACE('SQL 공부', '공부', '연습');  -- 결과: SQL 연습
+```
+
+- `FORMAT(num, decimals)` → 숫자 포맷 (콤마 포함)
+```sql
+SELECT FORMAT(12345.678, 2);  -- 결과: 12,345.68
+```
+
+- `SUBSTRING_INDEX(str, delim, count)` → 구분자로 자르기
+```sql
+SELECT SUBSTRING_INDEX('user@example.com', '@', 1);  -- 결과: user
+```
+
+---
+#### 2. 날짜/시간
+
+- `NOW()` → 현재 날짜/시간
+```sql
+SELECT NOW();
+```
+
+- `DATE_FORMAT(date, format)` → 포맷 지정
+```sql
+SELECT DATE_FORMAT(NOW(), '%Y-%m-%d');  -- 결과: 2025-08-17
+```
+
+- `DATEDIFF(date1, date2)` → 날짜 차이
+```sql
+SELECT DATEDIFF('2025-12-31', '2025-01-01');  -- 결과: 364
+```
+
+- `DATE_ADD(date, INTERVAL n DAY)` → 날짜 더하기
+```sql
+SELECT DATE_ADD('2025-01-01', INTERVAL 10 DAY);  -- 결과: 2025-01-11
+```
+
+---
+#### 3. 숫자
+
+- `RAND()` → 0~1 난수
+```sql
+SELECT RAND();
+```
+
+- `TRUNCATE(num, decimals)` → 소수점 이하 자르기
+```sql
+SELECT TRUNCATE(3.14159, 2);  -- 결과: 3.14
+```
+
+- `PI()` → 원주율
+```sql
+`SELECT PI();  -- 결과: 3.141593...`
+```
+
+---
+#### 4. 흐름 제어
+
+- `IF(condition, true_val, false_val)`
+```sql
+SELECT IF(1=1, '참', '거짓');  -- 결과: 참
+SELECT IF(10>5, '참', '거짓');  -- 결과: 참
+SELECT IF(2=3, '참', '거짓');  -- 결과: 거짓
+```
+
+- `IFNULL(expr1, expr2)`
+```sql
+SELECT IFNULL(NULL, '대체값');  -- 결과: 대체값
+```
+
+---
+#### 5. 윈도우 함수 (MySQL 8.0+)
+
+- `ROW_NUMBER()`
+```sql
+SELECT name, ROW_NUMBER() OVER (ORDER BY price DESC) AS rank FROM products;
+```
+
+- `RANK()` / `DENSE_RANK()`
+```sql
+SELECT name, RANK() OVER (ORDER BY price DESC) AS ranking FROM products;
+```
+
+---
+#### 6. JSON
+
+- `JSON_OBJECT(key, val, ...)`
+```sql
+SELECT JSON_OBJECT('name', '아이폰', 'price', 5000);
+```
+
+- `JSON_EXTRACT(json, path)`
+```sql
+SELECT JSON_EXTRACT('{"a": 1, "b": 2}', '$.a');  -- 결과: 1
+```
+
+---
+
+#### 7. 기타
+
+- `UUID()`
+```sql
+SELECT UUID();  -- 무작위 고유 ID
+```
+
+- `INET_ATON(ip)` → IP를 정수로 변환
+```sql
+SELECT INET_ATON('127.0.0.1'); -- 2130706433
+SELECT INET_NTOA(2130706433);  -- 결과: 127.0.0.1 (정수를 다시 IP로 변환)
+```
+
+- `GET_LOCK(str, timeout)`
+```sql
+SELECT GET_LOCK('my_lock', 10);
+```
+- 다른 세션이 이미 잠금 중이면 → `0` (타임아웃 동안 못 얻음)
+- 잠금이 없으면 → `1` (잠금 성공)
+- 권한 문제나 서버 오류 → `NULL`
+## 함수 관련 정리
+
+- **산술 연산**: `+`, `-`, `*`, `/` → 원하는 값으로 가공, `AS`로 별칭 권장.
+- **문자열 함수**: `CONCAT`, `CONCAT_WS`, `UPPER`, `LOWER`, `CHAR_LENGTH`, `LENGTH`.
+- **NULL 함수**: `IFNULL`, `COALESCE` → `NULL`을 의미 있는 값으로 대체.
+- **다양한 함수**: 표준 함수(호환성 ↑) + DBMS 전용 함수(편의성 ↑).
+- **MySQL 전용 함수**: 문자열, 날짜/시간, 숫자, 흐름 제어, 윈도우, JSON, 기타.
