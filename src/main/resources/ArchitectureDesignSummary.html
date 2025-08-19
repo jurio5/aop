@@ -1,0 +1,65 @@
+
+#  Spring에서 Stateless 설계를 지향하는 이유
+
+##  개념 정리
+
+- **Stateless**: 상태 없음. 인스턴스 필드에 상태를 저장하지 않음.
+- **Stateful**: 상태 있음. 인스턴스 필드에 상태(값)를 저장함.
+
+> Spring은 대부분의 Bean을 **싱글톤(Singleton)**으로 관리
+> → 하나의 인스턴스가 여러 요청(스레드)에서 **공유**됨
+
+---
+
+##  왜 Stateless를 지향할까?
+
+###  문제: 스레드 세이프(Thread-safe)하지 않기 때문
+
+- **stateful 설계**는 인스턴스 필드에 값을 저장함
+- 여러 스레드가 동시에 접근 시 → **Race Condition(경쟁 조건)** 발생
+
+###  잘못된 예시 (stateful)
+
+```java
+@Component
+public class OrderService {
+private int price; // 상태 저장
+
+public void order(String user, int price) {
+this.price = price;
+}
+
+public int getPrice() {
+return price;
+}
+}
+```
+- A 유저가 주문 → `price = 10000`
+
+- B 유저가 거의 동시에 주문 → `price = 20000`
+
+- A가 `getPrice()` 하면?  20000 (잘못된 값)
+
+## 올바른 설계 (stateless)
+
+```java
+@Component
+public class OrderService {
+public int order(String user, int price) {
+return price; // 상태 저장 없음
+}
+}
+
+```
+- 상태 저장하지 않고, 요청마다 결과만 리턴함
+
+- 여러 스레드가 동시에 접근해도 **안전함**
+
+### 정리
+
+- 마지막으로 정리를 해보면, 우리가 현재 사용하는 JPA 같은 경우는 엔티티 객체를 JPA에서 관리를 해주고 엔티티 객체의 인스턴스 필드를 사용해도 아무런 문제가 되지 않는다.
+- 이 이유는 JPA의 트랜잭션 즉, 영속성 컨텍스트와 관련이 있는데 이는 트랜잭션 매니저가 커넥션을 만들고 그 커넥션을 트랜잭션 동기화 매니저 라는 곳에 적재를 해두기에 이 곳에서 동기화 작업을 완벽하게 처리를 해주면서 스레드 세이프하게 자원들을 사용할 수 있었다.
+- 문제가 되는 부분은 `stateful`하게 설계되는 경우인데 보통 이런 일이 생기는 이유는 하나의 객체를 만들고 인스턴스 내부에 필드를 사용하며, 그 객체를 빈으로 등록할 때 싱글톤으로 관리가 되면서 발생하거나, 혹은 `static`한 필드를 사용할 때 `Race Condition`문제가 발생하게 된다.
+- 공유 자원의 경쟁 상태 문제는 값을 읽기만 하면 발생하지 않는다. 다만, 어디선가 값에 쓰기 작업을 하며 변경을 하기에 발생하는 문제이다.
+
+만약 `stateless`한 방식으로 설계가 불가능 할 경우 참조 키워드 -> [[ThreadLocal]]
