@@ -1,0 +1,173 @@
+# 외부 조인과 기타 조인
+
+## 외부 조인 (OUTER JOIN)
+
+- **내부 조인(INNER JOIN)** 은 두 테이블의 **교집합**만 보여준다.
+- 주문 기록이 없는 고객, 판매되지 않은 상품처럼 **짝이 없는 데이터**는 제외된다.
+- 이런 경우 **외부 조인(OUTER JOIN)** 을 사용한다.
+### 종류
+
+- `LEFT OUTER JOIN` (또는 `LEFT JOIN`)
+- **왼쪽 테이블**을 기준으로, 모든 데이터를 포함.
+- 오른쪽에 짝이 없으면 `NULL` 채움.
+
+- `RIGHT OUTER JOIN` (또는 `RIGHT JOIN`)
+- **오른쪽 테이블**을 기준으로, 모든 데이터를 포함.
+- 왼쪽에 짝이 없으면 `NULL` 채움.
+
+- `FULL OUTER JOIN`
+- 양쪽 데이터를 모두 포함.
+- MySQL은 지원하지 않음.
+### 특징
+
+- `OUTER` 키워드는 보통 생략 → `LEFT JOIN`, `RIGHT JOIN`
+- 실무에서는 `LEFT JOIN`이 훨씬 많이 사용된다.
+- 이유: 분석 기준 테이블을 `FROM` 절에 먼저 두고, 필요한 테이블을 `LEFT JOIN`으로 붙여가는 방식이 직관적이기 때문.
+- `RIGHT JOIN`은 언제든 `LEFT JOIN`으로 바꿔 표현할 수 있다.
+
+# 조인의 특징 (행 증가/유지 여부)
+
+## 1. 자식 → 부모 조인 (FK → PK)
+
+- **기준: 자식 테이블**
+예: `orders(자식)` → `users(부모)`
+```sql
+SELECT o.order_id, u.name
+FROM orders o
+JOIN users u ON o.user_id = u.user_id;
+```
+- `orders.user_id`는 FK → `users.user_id`(PK) 참조
+- 주문 한 건(`order_id`)은 **반드시 단 하나의 고객**만 가진다.
+- 따라서 `orders`의 행이 몇 개 있든, **그 개수 그대로 유지**됨.
+- 더 쉽게 풀이하면 `orders` 쪽에서 조회를 할 때 `FK`와 비교하면 그 `FK`에 맞는 레코드들만 출력이 되기 때문에(`ex) 1번 회원이 100번 주문 했으면 100개의 레코드만 조회`) 행 복사 문제가 발생하지 않는다는 뜻
+#### 비유하자면
+- `주문(자식)` : “나는 무조건 한 명의 고객(FK)에게 속한다.”
+- 따라서 주문을 기준으로 고객을 붙여도 **주문 개수가 늘어날 이유가 없음.**
+- 결과: `행 개수 유지`
+
+## 2. 부모 → 자식 조인 (PK → FK)
+
+- **기준: 부모 테이블**
+예: `users(부모)` → `orders(자식)`
+```sql
+SELECT u.user_id, u.name, o.order_id
+FROM users u
+JOIN orders o ON u.user_id = o.user_id;
+```
+- `users.user_id`는 PK → 고유(중복 불가).
+- 하지만 `orders.user_id`(FK)는 여러 번 나올 수 있다.
+- 고객 한 명이 주문을 여러 번 하면, **부모 행이 복제**되어 각각의 주문과 연결된다.
+- 더 쉽게 풀이하면 `users` 쪽에서 `PK(user_id)`를 기준으로 `orders`의 `FK(user_id)`를 조회하기 때문에 해당 PK에 매칭되는 모든 FK 레코드들이 결과에 포함된다. (예: 1번 회원이 주문을 3번 했다면 → `orders` 테이블의 `user_id=1`인 3개의 레코드가 모두 조회된다.) 이 과정에서 **부모 행이 주문 건수만큼 복제되어 출력**되므로, **행 수 증가 현상**이 발생한다.
+#### 비유하자면
+- `고객(부모)` : “나는 주문을 여러 개 가질 수 있다.”
+- 따라서 고객 1명이 주문을 3개 했다면 → 고객 정보가 **3번 반복**돼서 결과 행이 3개 생긴다.
+- 결과: `행 개수 증가 가능`
+
+## 핵심 원리
+
+- **PK (Primary Key)**
+- 유일하다 (한 테이블 내에서 절대 중복 불가)
+- 따라서 PK를 참조하는 쪽은 항상 **1:1 매칭**
+
+- **FK (Foreign Key)**
+- 중복될 수 있다 (여러 행이 같은 부모를 참조 가능)
+- 따라서 FK 쪽에서 조인을 걸면 **1:多 매칭**
+
+
+- 결국, **조인을 어떤 테이블을 기준으로 걸었느냐**에 따라
+- `자식 → 부모` : 행 그대로 (to-one 관계)
+- `부모 → 자식` : 행 늘어남 (to-many 관계)
+
+## 실무에서 중요한 이유
+
+예를 들어, 고객 수를 세고 싶어서 이렇게 하면?
+```sql
+SELECT COUNT(u.user_id)
+FROM users u
+JOIN orders o ON u.user_id = o.user_id;
+```
+- 주문이 여러 개인 고객은 **중복 계산**된다 → 고객 수가 아니라 **주문 수**가 나와버림.
+- 그래서 실무에서는 항상 **“이 조인이 to-one인가, to-many인가?”** 를 먼저 판단해야 한다.
+-  안 그러면 `COUNT`, `SUM`, `AVG` 결과가 왜곡됨.
+
+## 조인의 유연성
+
+PK–FK 조인이 가장 일반적이고 안정적이지만,
+실제로는 **같은 데이터 타입의 컬럼**이라면 어떤 컬럼이든 조인 조건으로 활용 가능하다.
+
+### 다양한 조인 예시
+
+1. **동명이인 찾기 (이름으로 조인)**
+```sql
+SELECT A.name, A.contact, B.department
+FROM customers A
+JOIN employees B ON A.name = B.name;
+```
+
+2. **특정 날짜 이벤트 연결 (날짜로 조인)**
+```sql
+SELECT A.order_id, A.amount, B.event_name
+FROM orders A
+JOIN marketing_events B ON A.order_date = B.start_date;
+```
+
+3. **지역별 데이터 분석 (지역 코드로 조인)**
+```sql
+SELECT A.store_name, B.avg_income
+FROM stores A
+JOIN region_stats B ON SUBSTRING(A.zipcode, 1, 2) = B.region_code;
+```
+
+4. **로그 데이터 분석 (상태 코드로 조인)**
+```sql
+SELECT A.request_url, B.error_description
+FROM web_logs A
+JOIN error_codes B ON A.status_code = B.code;
+```
+
+- 조인은 결국 **“두 테이블에서 컬럼 값이 같은 것끼리 연결한다”**는 원리.
+- 단, PK–FK 조인이 아닌 경우에는 값이 중복되거나 변경될 수 있으므로 데이터 정합성에 주의해야 한다.
+- 실무에서는 안정성을 위해 대부분 PK–FK 조인을 사용한다.
+
+## 셀프 조인 (SELF JOIN)
+
+- 동일한 테이블을 자기 자신과 조인하는 기법.
+- **자기 참조 관계**를 가진 테이블에서 사용.
+- 예: 직원 테이블에서 직원과 상사(`manager_id → employee_id`) 연결.
+### 원리
+
+- 같은 테이블에 서로 다른 **별칭(alias)** 부여.
+- 마치 서로 다른 두 테이블처럼 사용.
+### 예시
+
+- 직원(`e`)과 상사(`m`)를 연결
+```sql
+SELECT e.name AS employee_name, m.name AS manager_name
+FROM employees e
+LEFT JOIN employees m ON e.manager_id = m.employee_id;
+```
+
+## 크로스 조인 (CROSS JOIN)
+
+- 조인 조건(`ON`) 없이 두 테이블의 모든 행을 **곱집합(Cartesian Product)** 으로 생성.
+- 결과: `m * n` 행
+- 예: `sizes(4)` × `colors(3)` = 12행
+```sql
+select * from sizes cross join colors
+```
+
+- `concat 함수를 통해 다양한 조합도 가능 `
+```sql
+select concat('기본티셔츠-', c.color, '-', s.size), s.size, c.color from sizes s cross join colors c
+```
+### 활용
+- 상품 옵션 조합(색상 × 사이즈 등) 생성 시 유용.
+- `INSERT INTO ... SELECT`와 함께 사용하여 마스터 데이터를 손쉽게 생성 가능
+```sql
+insert into product_options (product_name, size, color)
+select concat('기본티셔츠-', c.color, '-', s.size), s.size, c.color from sizes s cross join colors c
+```
+### 주의사항
+
+- 결과 행 수가 기하급수적으로 늘어날 수 있음.
+- 대용량 테이블에 사용 시 DB 성능 저하 또는 서버 다운 위험.
