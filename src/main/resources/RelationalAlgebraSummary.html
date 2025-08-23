@@ -1,0 +1,78 @@
+# UNION
+
+## UNION
+
+- `JOIN`: 테이블을 **수평으로** 붙여 컬럼을 늘리는 기술
+- `UNION`: 결과 집합을 **수직으로** 붙여 행을 늘리는 기술
+- 목적: 흩어져 있는 데이터를 하나의 집합으로 모음
+```sql
+SELECT name, email FROM users
+UNION
+SELECT name, email FROM retired_users;
+```
+#### UNION 사용 규칙
+
+1. 컬럼 개수가 동일해야 함
+2. 같은 위치의 컬럼은 **호환 가능한 타입**이어야 함
+3. 최종 컬럼 이름은 **첫 번째 SELECT 문**을 따름
+4. **중복 행은 제거됨**
+
+## UNION ALL
+
+- `UNION`: 중복 제거
+- `UNION ALL`: 중복 허용 (성능 우수)
+```sql
+-- 예시: 전자기기 구매 고객 + 서울 거주 고객
+SELECT u.name, u.email
+FROM users u
+INNER JOIN orders o ON u.user_id = o.user_id
+INNER JOIN products p ON o.product_id = p.product_id
+WHERE p.category = '전자기기'
+
+UNION ALL
+
+SELECT name, email
+FROM users
+WHERE address LIKE '서울%';
+```
+- 실무 팁: **중복 제거가 꼭 필요할 때만 `UNION` 사용**, 그 외에는 항상 `UNION ALL` 권장
+
+## UNION 정렬
+
+- 정렬은 **전체 UNION 결과**에 대해 **마지막에 한 번만** 가능
+```sql
+SELECT name, email FROM users
+UNION
+SELECT name, email FROM retired_users
+ORDER BY name;
+```
+### 주의사항
+
+- `ORDER BY`는 **첫 번째 SELECT 컬럼/별칭만 사용 가능**
+- 없는 컬럼으로 정렬 시 에러 발생
+- 컬럼명이 다를 경우 **별칭(Alias) 권장**
+```sql
+SELECT name, email, created_at AS event_date FROM users
+UNION ALL
+SELECT name, email, retired_date AS event_date FROM retired_users
+ORDER BY event_date DESC;
+```
+
+## 정리
+
+### UNION
+
+- 결과 집합을 **수직으로 합침**
+- 컬럼 개수와 타입이 같아야 함
+- 첫 번째 SELECT 문 컬럼 이름을 따름
+- 중복은 자동 제거됨
+### UNION ALL
+
+- 중복 제거하지 않고 그대로 합침
+- `UNION`보다 성능 우수
+- 중복 제거가 필요할 때만 `UNION` 사용
+### 정렬
+
+- `ORDER BY`는 전체 UNION 뒤에 한 번만 사용 가능
+- 첫 번째 SELECT 문 컬럼명 또는 별칭만 사용 가능
+- 컬럼명이 다르면 별칭 사용 권장
