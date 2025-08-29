@@ -1,0 +1,135 @@
+# 데이터 무결성
+
+## 데이터 무결성이 중요한 이유
+
+- 데이터베이스의 가장 중요한 역할: **데이터를 안전하게 지키고 관리**
+- 잘못된 데이터(쓰레기 데이터, Garbage Data)가 들어가면 → 분석/보고/애플리케이션 동작 모두 신뢰 상실
+→ _Garbage In, Garbage Out (GIGO)_
+
+### 쓰레기 데이터가 초래하는 재앙
+
+- **잘못된 비즈니스 결정** : 음수 매출액 보고서
+- **치명적인 시스템 오류** : 예상치 못한 음수 값으로 앱 중단
+- **데이터 불일치** : `users` 에는 없는 고객이 `orders` 에 남는 경우
+
+-  따라서 DB는 **데이터를 지키는 최후의 보루**가 되어야 함. (데이터 무결성 제약조건)
+
+## 제약 조건(Constraints)의 역할
+
+- 테이블에 데이터를 `INSERT`, `UPDATE`, `DELETE` 할 때 규칙을 강제
+- 잘못된 데이터를 **DB 레벨에서 차단**
+- 주요 제약 조건: `NOT NULL`, `UNIQUE`, `PRIMARY KEY`, `DEFAULT`, `FOREIGN KEY`, `CHECK`
+
+## 기본 제약 조건
+
+### `NOT NULL` : NULL 값 방지
+
+- **역할**: 필수 데이터 누락 차단
+- 예시:
+```sql
+email VARCHAR(255) NOT NULL
+```
+- 위반 시:
+```sql
+INSERT INTO users (name, email) VALUES ('냐옹이', NULL);
+-- Error Code: 1048. Column 'email' cannot be null
+```
+
+### `UNIQUE` : 중복 값 방지
+
+- **역할**: 테이블 내 고유 값 보장
+- 예시:
+```sql
+email VARCHAR(255) UNIQUE
+```
+- 위반 시:
+```sql
+INSERT INTO users (name, email) VALUES ('가짜 션', 'sean@example.com');
+-- Error Code: 1062. Duplicate entry 'sean@example.com' for key 'users.email'
+```
+
+### `PRIMARY KEY` : 행의 대표 식별자
+
+- **특징**: `NOT NULL` + `UNIQUE` 결합
+- 테이블당 1개만 설정 가능, 인덱스 자동 생성
+- 예시:
+```sql
+user_id BIGINT PRIMARY KEY
+```
+- 위반 시:
+```sql
+INSERT INTO users (user_id, name, email) VALUES (1, '누군가', 'someone@example.com');
+-- Error Code: 1062. Duplicate entry '1' for key 'users.PRIMARY'
+```
+### `DEFAULT` : 기본값 설정
+
+- **역할**: 값 미입력 시 자동 기본값 지정
+- 예시:
+```sql
+status VARCHAR(50) DEFAULT 'PENDING'
+```
+
+## 외래 키 제약 조건 (Foreign Key)
+
+### 참조 무결성 (Referential Integrity)
+
+- 두 테이블 관계가 항상 유효하고 일관되게 유지되어야 함
+- **외래 키 역할**:
+1. 존재하지 않는 부모 키 참조 불가 (유령 주문 방지)
+2. 참조 중인 부모 데이터 삭제/수정 차단
+
+- 위반 시 예시:
+```sql
+INSERT INTO orders (user_id, product_id, quantity) VALUES (999, 1, 1);
+-- users 테이블의 user_id 999 번이 존재하지 않음
+-- Error Code: 1452. Cannot add or update a child row...
+```
+
+### `ON DELETE` / `ON UPDATE` 옵션
+
+- `RESTRICT` (기본값): 부모 데이터 변경/삭제 차단
+- `CASCADE`: 부모 데이터 변경/삭제 시 자식 데이터도 연쇄 변경/삭제
+- `SET NULL`: 부모 변경 시 자식의 FK를 `NULL` 처리
+
+-  `CASCADE` 는 편리하지만 **대량 삭제 위험** → 실무에선 주의 필요
+
+## CHECK 제약 조건
+
+- **역할**: 값의 범위/조건을 직접 지정 (데이터 **내용** 유효성 강제)
+- 예시:
+```sql
+price INT CHECK (price >= 0),
+stock_quantity INT CHECK (stock_quantity >= 0),
+discount_rate DECIMAL(5,2) CHECK (discount_rate BETWEEN 0 AND 100)
+```
+
+### 위반 시
+
+1. 가격 음수 입력
+```sql
+INSERT INTO products (name, price, stock_quantity) VALUES ('오류상품', -5000, 10);
+-- Error Code: 3819. Check constraint violated
+```
+
+2. 할인율 범위 초과
+```sql
+INSERT INTO products (name, price, stock_quantity, discount_rate)
+VALUES ('초특가상품', 50000, 20, 120.00);
+-- Error Code: 3819. Check constraint violated
+```
+
+## 정리
+
+- **데이터 무결성**: 정확성·일관성·유효성 보장
+- **제약 조건 종류**
+- `NOT NULL`: 필수 값 보장
+- `UNIQUE`: 중복 방지
+- `PRIMARY KEY`: 행 식별자
+- `DEFAULT`: 기본값 자동 지정
+- `FOREIGN KEY`: 테이블 간 관계 무결성 보장
+- `CHECK`: 값의 범위/조건 검증
+
+-  DB는 **데이터를 지키는 최후의 방어선**이다.
+- 그렇다면 데이터 검증은 어디서 하는게 좋은가?
+- 요즘 대세는 애플리케이션 코드에서 비즈니스 로직과 유효성 검사를 처리하는게 훨씬 유연하고 테스트가 쉽기 때문에 더 지향하는 방법
+- DB에서의 `CHECK` 제약 조건을 잘 사용하지 않는 추세이나, 만약 최후의 방어선으로 활용한다면, 간단하지만 절대 값이 바뀌면 안 되는 핵심 데이터에만 정말 최후의 방어선으로 사용하는 것이 좋다.
