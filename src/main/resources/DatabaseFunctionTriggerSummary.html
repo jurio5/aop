@@ -1,0 +1,79 @@
+# 저장 프로시저, 함수, 트리거
+
+## 1. 개념 정리
+
+- **저장 프로시저 (Stored Procedure)**
+- 이름이 붙은 SQL 작업 묶음
+- 제어문(`IF`, `LOOP`) 사용 가능
+- `CALL 프로시저명(파라미터)`로 실행
+
+- **저장 함수 (Stored Function)**
+- 특정 계산 수행 → 반드시 **하나의 값 반환**
+- `SELECT` 문 안에서 내장 함수처럼 사용 가능
+
+- **트리거 (Trigger)**
+- 특정 이벤트(`INSERT`, `UPDATE`, `DELETE`) 발생 시 자동 실행
+- 직접 호출 불가, 조건 만족 시 DB가 자동 수행
+### 과거의 장점
+
+- 성능 최적화 (네트워크 왕복 최소화)
+- 로직 중앙화 & 재사용
+- 보안 강화 (`EXECUTE` 권한만 부여 가능)
+
+- **저장 프로시저 예시**
+```sql
+CREATE PROCEDURE sp_change_user_address(IN user_id INT, IN new_addr VARCHAR(255))
+BEGIN
+UPDATE users SET address = new_addr WHERE user_id = user_id;
+INSERT INTO logs(description)
+VALUES(CONCAT('User ID ', user_id, ' 주소 변경 ', new_addr));
+END;
+```
+- 호출: `CALL sp_change_user_address(2, '경기도 성남시');`
+
+- **저장 함수 예시**
+```sql
+CREATE FUNCTION fn_get_final_price(price INT, discount DECIMAL(5,2))
+RETURNS DECIMAL(10,2)
+DETERMINISTIC
+BEGIN
+RETURN price * (1 - discount / 100);
+END;
+```
+- 사용: **SELECT name, fn_get_final_price(price, discount_rate) FROM stored_items;**
+
+- **트리거 예시**
+```sql
+CREATE TRIGGER trg_backup_user
+BEFORE DELETE ON users
+FOR EACH ROW
+BEGIN
+INSERT INTO retired_users(id, name, email, retired_date)
+VALUES (OLD.user_id, OLD.name, OLD.email, CURDATE());
+END;
+```
+- `DELETE FROM users WHERE user_id = 5;` 실행 시 자동 백업 수행
+## 현대 개발에서 기피하는 이유
+
+1. **유지보수 어려움**
+- 로직이 DB와 애플리케이션에 분산 → 추적/버전 관리 힘듦
+
+2. **성능 & 확장성 문제**
+- DB는 병목 지점이 되기 쉽고, 수평 확장 어렵고 비용 큼
+- 애플리케이션 서버가 로직 담당하는 것이 유리
+
+3. **벤더 종속성**
+- Oracle(PL/SQL), MSSQL(T-SQL), PostgreSQL(PL/pgSQL), MySQL 등 문법 상이
+- DB 이전 시 모든 로직 재작성 필요
+## 현대적 대안
+
+- **애플리케이션 계층** → 비즈니스 로직 담당
+- **데이터베이스 계층** → 저장, 조회, 무결성, 트랜잭션 관리만 담당
+
+## 정리
+
+- 저장 프로시저: SQL 묶음, `CALL`로 실행
+- 저장 함수: 반드시 값 반환, 쿼리 안에서 활용
+- 트리거: 이벤트 발생 시 자동 실행
+- 현대 개발에서는 유지보수/확장성/종속성 문제로 잘 사용하지 않음
+- 역할 분리를 통한 아키텍처가 권장됨
