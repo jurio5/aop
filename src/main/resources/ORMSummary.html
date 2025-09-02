@@ -1,0 +1,41 @@
+### ORM 이 필요한 이유
+
+- 현재 시대의 웹 개발은 애플리케이션 같은 경우 객체 지향 중심으로, 데이터베이스의 경우 `RDBMS` 즉, 관계형 데이터 베이스 방식을 사용한다.
+- 관계형 데이터베이스의 경우는 `SQL`문법만 알아들을 수 있어서, 네이티브 쿼리 방식으로 똑같은 CRUD를 사용하며, 자바 객체를 SQL로 SQL을 자바 객체로 변환을 하며 지루한 코드를 반복하는 구조이다.
+- 객체 같은 경우는 컬렉션을 예로들면 `list`의 경우 간단하게 데이터를 저장할 때 `add`를 이용하여 저장하고, 불러올 땐 `get`을 이용하여 간단히 조회할 수 있지만, `RDBMS`의 경우 상속 관계가 존재하지 않기에, 조인을 통해서 복잡한 과정을 거쳐서 조회를 해야하는 번거로움이 있다.
+- 연관관계 또한 차이가 있는데, 객체의 경우는 간단히 `참조`를 사용하여 불러올 수 있는데 (`member.getTeam()`) 테이블의 경우 외래 키를 사용해야하고 이 부분은 위와 같이 조인을 사용해야하는 불편함이 있다. (`JOIN ON M.TEAM_ID = T.TEAM_ID)
+- 직접 네이티브 쿼리 방식으로 코드를 짠다고 가정해보면
+```java
+String memberId = "100";
+Member member1 = memberRepository.find(memberId);
+Member member2 = memberRepository.find(memberId);
+
+member1 == member2 // 동일성으로 비교 시 인스턴스가 다르기 때문에 서로 다른 객체이다.
+
+class MemberRepository
+
+public Member getMember(String memberId) {
+String sql = "SELECT * FROM MEMBER WHERE MEMBER_ID = ?";
+...
+// JDBC SQL 실행
+return new Member(...);
+}
+```
+- 굉장히 복잡하고 번거로우면서 서로의 인스턴스 값이 다르기에 어떻게 조회를 해야할 지 알 방법이 없다.
+- 그렇다면 자바의 컬렉션에서 조회를 해보면?
+```java
+String memberId = "100";
+Member member1 = list.add(memberId);
+Member member2 = list.add(memberId);
+
+member1 == member2; // 같은 곳을 참조하고 있기에 서로 동일하다.
+```
+- 그렇다면, 객체를 자바 컬렉션에 저장하듯이 DB에 저장할 수는 없을까? 같은 고민이 생기게 된다.
+- 그래서 생겨난 방식이 ORM 방식의 `JPA`이다.
+
+
+### ORM 이란?
+- Object-relational mapping (객체 관계 매핑)
+- 객체는 객체대로 설계, RDBMS는 RDBMS대로 설계
+- ORM 프레임워크가 중간에서 매핑해주며 객체처럼 사용하는 것
+- 대중적인 언어에는 대부분 ORM 기술을 지원
